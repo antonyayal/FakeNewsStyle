@@ -18,38 +18,39 @@ La arquitectura está diseñada para ser **reproducible y extensible**.
 
 ```mermaid
 flowchart TD
-  A[Input: texto + metadatos opcionales] --> B[Preprocessing]
-  B --> B1[Limpieza/Normalización]
-  B --> B2[Tokenización]
-  B --> B3[Split: train/val/test]
-  
-  B --> C[Feature Extraction Layer]
-  C --> C1[Semantic Features<br/>BERT/RoBERTa-es/BETO]
-  C --> C2[Style Features<br/>Estilometría / POS / n-grams / puntuación]
-  C --> C3[Emotion Features<br/>Lexicons/Modelos]
-  C --> C4[Readability Features<br/>Índices + stats]
-  C --> C5[Domain Features (opcional)<br/>Memoria/Clusters/Topic]
+  A[Input: text and optional metadata] --> B[Preprocessing]
+  B --> B1[Cleaning and normalization]
+  B --> B2[Tokenization]
+  B --> B3[Train-val-test split]
 
-  C1 --> D[Fusion / Representation]
+  B --> C[Feature extraction]
+  C --> C1[Semantic features: BETO or RoBERTa-es]
+  C --> C2[Style features: stylometry and syntax]
+  C --> C3[Emotion features: lexicon or model]
+  C --> C4[Readability features: indices and stats]
+  C --> C5[Domain features: memory or clustering optional]
+
+  C1 --> D[Fusion and representation]
   C2 --> D
   C3 --> D
   C4 --> D
   C5 --> D
 
-  D --> D1[Concatenation / MLP]
-  D --> D2[Attention / Gating (opcional)]
-  D --> D3[M3FEND Fusion + Memory (opcional)]
+  D --> D1[Concatenation plus MLP]
+  D --> D2[Attention or gating optional]
+  D --> D3[Memory augmented fusion optional]
 
-  D1 --> E[Classifier Head]
+  D1 --> E[Classifier head]
   D2 --> E
   D3 --> E
 
-  E --> F[Predicción: Fake / Real<br/>+ Scores]
-  E --> G[Evaluación]
-  G --> G1[Métricas: Acc, Prec, Rec, F1, AUC]
-  G --> G2[Error Analysis]
-  G --> G3[Ablation Study]
-  
-  F --> H[Inference / Explainability]
-  H --> H1[SHAP/LIME (opcional)]
-  H --> H2[Feature Importance (baselines)]
+  E --> F[Prediction: fake or real plus score]
+  E --> G[Evaluation]
+  G --> G1[Metrics: Acc Prec Rec F1 AUC]
+  G --> G2[Error analysis]
+  G --> G3[Ablation study]
+
+  F --> H[Inference and explainability]
+  H --> H1[SHAP or LIME optional]
+  H --> H2[Feature importance for baselines]
+```
