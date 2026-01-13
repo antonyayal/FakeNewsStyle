@@ -54,3 +54,6 @@ flowchart TD
   H --> H1[SHAP or LIME optional]
   H --> H2[Feature importance for baselines]
 ```
+
+# Arquitectura
+![Architecture Diagram](docs/diagrams/architecture_overview.svg)
