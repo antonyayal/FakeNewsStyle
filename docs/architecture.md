@@ -56,4 +56,4 @@ flowchart TD
 ```
 
 # Arquitectura
-![Architecture Diagram](docs/diagrams/architecture_overview.svg)
+![Architecture Diagram](architecture_overview.svg)
