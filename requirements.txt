@@ -1,0 +1,7 @@
+# Core Python
+numpy<2,>=1.26.4
+pandas>=2.2.0
+scipy>=1.12.0
+
+# corpus handling
+openpyxl>=3.1.2
