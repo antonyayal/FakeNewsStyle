@@ -55,5 +55,5 @@ flowchart TD
   H --> H2[Feature importance for baselines]
 ```
 
-# Arquitectura
+# 3) Arquitectura pipeline
 ![Architecture Diagram](architecture_overview.svg)

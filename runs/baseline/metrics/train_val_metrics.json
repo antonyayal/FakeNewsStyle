@@ -1,0 +1,11 @@
+{
+  "status": "placeholder",
+  "message": "Training not implemented yet. This is a stub checkpoint.",
+  "created_at_unix": 1768449678,
+  "config_path": "/media/Alumnos/antonio/Projects/FakeNewsStyle/configs/exp.json",
+  "best_ckpt": "/media/Alumnos/antonio/Projects/FakeNewsStyle/runs/baseline/checkpoints/best.ckpt",
+  "val": {
+    "metric": null,
+    "note": "No validation executed yet (placeholder)."
+  }
+}

@@ -8,45 +8,46 @@ import pandas as pd
 BASE_DIR = Path(__file__).resolve().parents[1]
 
 # ---------------------------------
-# Input PKL
+# Input PKL (from env or default)
 # ---------------------------------
 env_path = os.environ.get("DATA_PATH")
 
 pkl_path = (
     Path(env_path)
     if env_path
-    else BASE_DIR / "data" / "processed" / "FakeNewsCorpusSpanish" / "test.pkl"
+    else BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish" / "test.pkl"
 )
 
+if not pkl_path.exists():
+    raise FileNotFoundError(f"PKL not found: {pkl_path}")
+
+# ---------------------------------
+# Load PKL
+# ---------------------------------
 df = pd.read_pickle(pkl_path, compression="infer")
 
-print(type(df))
-print(df.shape)
-print(df.head().to_string())
+print("Loaded PKL:")
+print(" - Path :", pkl_path)
+print(" - Shape:", df.shape)
+print(" - Columns:", list(df.columns))
 
 # ---------------------------------
-# Export PKL → CSV
+# Output CSV
 # ---------------------------------
 csv_path = (
-    BASE_DIR / "data" / "exports" / "FakeNewsCorpusSpanish" / "test_dataset.csv"
-)
-csv_path.parent.mkdir(parents=True, exist_ok=True)
-
-df.to_csv(csv_path, index=False)
-
-# ---------------------------------
-# CSV → PKL
-# ---------------------------------
-pkl_from_csv_path = (
     BASE_DIR
     / "data"
-    / "processed"
+    / "exports"
     / "FakeNewsCorpusSpanish"
-    / "test_dataset_from_csv.pkl"
+    / f"{pkl_path.stem}.csv"
 )
 
-df_csv = pd.read_csv(csv_path)
-df_csv.to_pickle(pkl_from_csv_path, compression="infer")
+csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-print("Conversion from CSV to PKL completed.")
-print(type(df_csv))
+# ---------------------------------
+# Save CSV
+# ---------------------------------
+df.to_csv(csv_path, index=False, encoding="utf-8")
+
+print("CSV created:")
+print(" - Path :", csv_path)
