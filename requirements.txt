@@ -1,7 +1,15 @@
 # Core Python
-numpy<2,>=1.26.4
+numpy>=1.26.4,<2
 pandas>=2.2.0
 scipy>=1.12.0
 
 # corpus handling
 openpyxl>=3.1.2
+
+# Transformers and tokenizers
+transformers>=4.41.2
+tokenizers>=0.19.1
+
+# PyTorch
+torch>=2.2.2
+torch --index-url https://download.pytorch.org/whl/cu121
