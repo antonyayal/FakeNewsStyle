@@ -1,18 +1,80 @@
+"""
+Emotion feature extractor (pysentimiento) + CUDA enablement (pattern aligned with semantic_extractor)
+
+Goal
+----
+This module generates emotion + sentiment probabilities per sample using
+pysentimiento (transformers under the hood) and saves them as new PKLs
+(train/val/test). It also adds lightweight "emotional style signals".
+
+Why this file exists
+--------------------
+- pysentimiento provides strong Spanish emotion and sentiment classifiers.
+- We export stable features (probabilities + signals) for downstream models.
+
+Outputs
+-------
+For each input PKL (train/val/test), creates an output PKL with:
+- Id (if exists)
+- label (if exists)
+- emo_probs : list[float] (sorted by class name)
+- sent_probs: list[float] (sorted by class name)
+- emo_labels: list[str]
+- sent_labels: list[str]
+- signals  : list[float]
+- signal_names : list[str]
+- device : device used ("cuda"|"cpu")
+- batch_size : batch size used
+- normalize_signals_by : "chars" or "tokens"
+
+Expected input columns
+----------------------
+- text (string)  OR  text_clean  OR  text_xlmr  (configurable via text_col)
+Optional:
+- Id, label (or Category)
+
+Usage (example)
+---------------
+from pathlib import Path
+from src.features.emotion_extractor import extract_emotion_features_for_splits
+
+extract_emotion_features_for_splits(
+    input_dir=Path("data/processed_by_model/FakeNewsCorpusSpanish"),
+    output_dir=Path("data/features/emotion/FakeNewsCorpusSpanish"),
+    log_dir=Path("logs/features"),
+    text_col="text_xlmr",
+    batch_size=32,
+    device="cuda"  # or "cpu"
+)
+"""
+
 from __future__ import annotations
 
+import logging
 import re
-import time
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 import emoji
 
 from pysentimiento import create_analyzer
 from pysentimiento.preprocessing import preprocess_tweet
 
+# Optional torch (for CUDA detection + no_grad/inference_mode)
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
 
-# Puedes ajustar/expandir esta lista según tu corpus (headlines/noticias).
+
+# =====================================================
+# Defaults
+# =====================================================
+
 DEFAULT_INTENSIFIERS = {
     "terrible",
     "increíble",
@@ -37,501 +99,516 @@ DEFAULT_INTENSIFIERS = {
 }
 
 
+# =====================================================
+# Logging (same pattern)
+# =====================================================
+def get_logger(log_dir: Path, name: str = "emotion_extractor") -> logging.Logger:
+    """
+    Create a logger that writes to console and to a unique file per run:
+      <log_dir>/<name>_YYYY-MM-DD_HH-MM-SS.log
+    """
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = (log_dir / f"{name}_{timestamp}.log").resolve()
+
+    logger = logging.getLogger(f"{name}_{timestamp}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    logger.info(f"Logging to file: {log_file}")
+    return logger
+
+
+def _flush_and_close_logger(logger: logging.Logger) -> None:
+    for h in logger.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+        try:
+            h.close()
+        except Exception:
+            pass
+
+
+# =====================================================
+# Config
+# =====================================================
 @dataclass
-class EmotionExtractorConfig:
+class ExtractConfig:
     lang: str = "es"
+    batch_size: int = 32
+    device: str = "cpu"  # "cuda" if available
     use_preprocess_tweet: bool = False
-    intensifiers: Optional[set] = None
 
-    # Normalización de señales:
-    # - "chars": ratios normalizados por longitud en caracteres
-    # - "tokens": ratios normalizados por cantidad de tokens
-    normalize_signals_by: str = "chars"  # "chars" | "tokens"
-
-    # Si True, agrega señales adicionales (útiles para estilo emocional)
+    # "chars" or "tokens"
+    normalize_signals_by: str = "chars"
     extra_signals: bool = True
-
-    # Si True, devuelve NaN-safe: reemplaza NaNs/inf por 0
     safe_numeric: bool = True
 
+    intensifiers: Optional[set] = None
 
-class EmotionExtractor:
+
+# =====================================================
+# Device helpers
+# =====================================================
+def _resolve_device(requested: str, logger: logging.Logger) -> str:
     """
-    Emotion Feature Extractor (Spanish) using pysentimiento.
-
-    Output vector:
-      [emotion_probs..., sentiment_probs..., signals...]
-
-    - emotion_probs: probabilidades por clase emocional (según el modelo de pysentimiento)
-    - sentiment_probs: probabilidades por clase POS/NEG/NEU (según el modelo de pysentimiento)
-    - signals (base):
-        - sig_exclam_ratio
-        - sig_question_ratio
-        - sig_uppercase_ratio
-        - sig_emoji_ratio
-        - sig_intensifier_ratio
-      + signals (extra, si config.extra_signals=True):
-        - sig_len_chars
-        - sig_len_tokens
-        - sig_punct_ratio
-        - sig_digit_ratio
-        - sig_repeat_exclam_ratio
-        - sig_repeat_question_ratio
-        - sig_elipsis_ratio
-        - sig_quote_ratio
-
-    Nota: Este extractor NO carga PKL. Solo procesa texto.
-    Puede guardar su salida a PKL mediante save_features_pkl / extract_and_save_pkl.
+    Resolve "cuda" vs "cpu" in the same spirit as semantic_extractor.
     """
+    req = (requested or "cpu").lower().strip()
+    if req not in {"cpu", "cuda"}:
+        req = "cpu"
 
-    def __init__(self, config: EmotionExtractorConfig = EmotionExtractorConfig()):
-        self.config = config
-        self.intensifiers = config.intensifiers or DEFAULT_INTENSIFIERS
+    if req == "cuda":
+        if torch is not None and torch.cuda.is_available():
+            return "cuda"
+        logger.warning("Requested device=cuda but CUDA is not available. Falling back to CPU.")
+        return "cpu"
 
-        # Analyzers (cargan modelos transformer por debajo)
-        self.emotion_analyzer = create_analyzer(task="emotion", lang=config.lang)
-        self.sentiment_analyzer = create_analyzer(task="sentiment", lang=config.lang)
+    return "cpu"
 
-        # Cache de nombres (se llena en el primer predict real)
-        self._emo_labels: Optional[List[str]] = None
-        self._sent_labels: Optional[List[str]] = None
 
-        # Cache de feature names final (cuando ya tenemos labels)
-        self._feature_names: Optional[List[str]] = None
+def _try_move_analyzer_to_device(analyzer: Any, device: str, logger: logging.Logger) -> None:
+    """
+    Best-effort: pysentimiento analyzers usually wrap a HF model.
+    We try to move analyzer.model to the chosen device if present.
+    """
+    if device != "cuda":
+        return
+    if torch is None:
+        logger.warning("torch is not available; cannot move model to CUDA. Using CPU.")
+        return
 
-    # -------------------------
-    # Logging helpers (igual paradigma que preprocess: escribir en logs/)
-    # -------------------------
+    model = getattr(analyzer, "model", None)
+    if model is None:
+        # Not fatal: wrapper might manage device internally.
+        logger.info("Analyzer has no attribute 'model'. Skipping explicit model.to(device).")
+        return
 
-    @staticmethod
-    def _ensure_dir(p):
-        from pathlib import Path
+    try:
+        model.to("cuda")
+        model.eval()
+        logger.info("Moved analyzer.model to CUDA.")
+    except Exception as e:
+        logger.warning(f"Could not move analyzer.model to CUDA: {type(e).__name__}: {e}")
 
-        pp = Path(p)
-        pp.mkdir(parents=True, exist_ok=True)
-        return pp
 
-    @staticmethod
-    def _append_log_line(log_file, msg: str) -> None:
-        from datetime import datetime
-        from pathlib import Path
+# =====================================================
+# Signals (CPU-light)
+# =====================================================
+def _uppercase_ratio(text: str) -> float:
+    uppercase = sum(1 for c in text if c.isupper())
+    letters = sum(1 for c in text if c.isalpha())
+    return float(uppercase) / max(letters, 1)
 
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(f"[{ts}] {msg}\n")
 
-    @staticmethod
-    def _format_kv(d: Dict[str, Any]) -> str:
-        return " | ".join([f"{k}={v}" for k, v in d.items()])
+def _emoji_ratio(text: str) -> float:
+    emojis = [c for c in text if c in emoji.EMOJI_DATA]
+    return float(len(emojis)) / max(len(text.split()), 1)
 
-    # -------------------------
-    # Public API
-    # -------------------------
 
-    def extract(self, text: str) -> np.ndarray:
-        """
-        Extrae el vector de features para 1 texto.
-        """
-        text_n = self._normalize_input(text)
+def _punct_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    punct = sum(1 for c in text if (not c.isalnum() and not c.isspace()))
+    return float(punct) / max(len(text), 1)
 
-        emo_vec, emo_labels = self._emotion_probs(text_n)
-        sent_vec, sent_labels = self._sentiment_probs(text_n)
-        signals = self._signals(text_n)
 
-        self._set_labels_if_needed(emo_labels, sent_labels)
+def _digit_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    digits = sum(1 for c in text if c.isdigit())
+    return float(digits) / max(len(text), 1)
 
-        vec = np.concatenate([emo_vec, sent_vec, signals]).astype(np.float32)
-        return self._safe(vec)
 
-    def extract_with_names(self, text: str) -> Tuple[np.ndarray, List[str]]:
-        """
-        Devuelve (vector, feature_names) para 1 texto.
-        """
-        vec = self.extract(text)
-        names = self.feature_names()
-        return vec, names
+def _repeat_punct_ratio(text: str, pattern: str, denom: int) -> float:
+    if not text:
+        return 0.0
+    repeats = len(re.findall(pattern, text))
+    return float(repeats) / max(denom, 1)
 
-    def extract_dict(self, text: str) -> Dict[str, float]:
-        """
-        Devuelve un dict {feature_name: value} para 1 texto.
-        """
-        vec, names = self.extract_with_names(text)
-        return {k: float(v) for k, v in zip(names, vec)}
 
-    def extract_batch(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
-        """
-        Extrae features para una lista de textos.
-        Regresa matriz shape: (N, D).
-        """
-        if not texts:
-            return np.zeros((0, 0), dtype=np.float32)
+def _quote_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    quotes = text.count('"') + text.count("“") + text.count("”") + text.count("'")
+    return float(quotes) / max(len(text), 1)
 
-        texts_n = [self._normalize_input(t) for t in texts]
 
-        emo_preds = self._predict_many(self.emotion_analyzer, texts_n, batch_size=batch_size)
-        sent_preds = self._predict_many(self.sentiment_analyzer, texts_n, batch_size=batch_size)
+def _signals(
+    text: str,
+    intensifiers: set,
+    normalize_signals_by: str = "chars",
+    extra_signals: bool = True,
+) -> np.ndarray:
+    tokens = re.findall(r"\w+", (text or "").lower())
+    num_tokens = max(len(tokens), 1)
+    num_chars = max(len(text), 1)
 
-        emo_labels = self._sorted_proba_keys(emo_preds[0].probas) if emo_preds else []
-        sent_labels = self._sorted_proba_keys(sent_preds[0].probas) if sent_preds else []
-        self._set_labels_if_needed(emo_labels, sent_labels)
+    denom = num_chars if normalize_signals_by == "chars" else num_tokens
 
-        emo_mat = np.vstack([self._probas_to_vec(p.probas, emo_labels) for p in emo_preds]).astype(np.float32)
-        sent_mat = np.vstack([self._probas_to_vec(p.probas, sent_labels) for p in sent_preds]).astype(np.float32)
-        sig_mat = np.vstack([self._signals(t) for t in texts_n]).astype(np.float32)
+    exclam = (text or "").count("!")
+    question = (text or "").count("?")
 
-        out = np.hstack([emo_mat, sent_mat, sig_mat]).astype(np.float32)
-        return self._safe(out)
+    exclam_ratio = exclam / max(denom, 1)
+    question_ratio = question / max(denom, 1)
+    upper_ratio = _uppercase_ratio(text or "")
+    emo_ratio = _emoji_ratio(text or "")
+    intens_ratio = float(sum(1 for t in tokens if t in intensifiers)) / max(len(tokens), 1)
 
-    def feature_names(self) -> List[str]:
-        """
-        Devuelve los nombres de features en el mismo orden del vector.
-        """
-        if self._feature_names is not None:
-            return self._feature_names
+    base = np.array(
+        [exclam_ratio, question_ratio, upper_ratio, emo_ratio, intens_ratio],
+        dtype=np.float32,
+    )
 
-        if self._emo_labels is None or self._sent_labels is None:
-            _ = self.extract("test")
+    if not extra_signals:
+        return base
 
-        names: List[str] = []
-        names += [f"emo_{k}" for k in (self._emo_labels or [])]
-        names += [f"sent_{k}" for k in (self._sent_labels or [])]
-        names += self._signal_feature_names()
+    punct = _punct_ratio(text or "")
+    digits = _digit_ratio(text or "")
+    rep_ex = _repeat_punct_ratio(text or "", r"!{2,}", denom)
+    rep_q = _repeat_punct_ratio(text or "", r"\?{2,}", denom)
+    elip = _repeat_punct_ratio(text or "", r"\.{3,}", denom)
+    quot = _quote_ratio(text or "")
 
-        self._feature_names = names
+    extra = np.array(
+        [
+            float(num_chars),
+            float(num_tokens),
+            punct,
+            digits,
+            rep_ex,
+            rep_q,
+            elip,
+            quot,
+        ],
+        dtype=np.float32,
+    )
+    return np.concatenate([base, extra]).astype(np.float32)
+
+
+def signal_feature_names(extra_signals: bool = True) -> List[str]:
+    names = [
+        "sig_exclam_ratio",
+        "sig_question_ratio",
+        "sig_uppercase_ratio",
+        "sig_emoji_ratio",
+        "sig_intensifier_ratio",
+    ]
+    if not extra_signals:
         return names
+    names += [
+        "sig_len_chars",
+        "sig_len_tokens",
+        "sig_punct_ratio",
+        "sig_digit_ratio",
+        "sig_repeat_exclam_ratio",
+        "sig_repeat_question_ratio",
+        "sig_elipsis_ratio",
+        "sig_quote_ratio",
+    ]
+    return names
 
-    def meta(self) -> Dict[str, Any]:
-        """
-        Metadata útil para logging/experimentos.
-        """
-        return {
-            "module": "EmotionExtractor",
-            "lang": self.config.lang,
-            "use_preprocess_tweet": self.config.use_preprocess_tweet,
-            "normalize_signals_by": self.config.normalize_signals_by,
-            "extra_signals": self.config.extra_signals,
-            "num_intensifiers": len(self.intensifiers),
-            "emo_labels": self._emo_labels,
-            "sent_labels": self._sent_labels,
-            "feature_dim": len(self.feature_names()) if (self._emo_labels and self._sent_labels) else None,
-        }
 
-    # -------------------------
-    # Persistence (PKL output) + LOG
-    # -------------------------
+def _safe(x: np.ndarray, safe_numeric: bool) -> np.ndarray:
+    if not safe_numeric:
+        return x
+    return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
-    def save_features_pkl(
-        self,
-        texts: List[str],
-        output_path,
-        ids: Optional[List[Any]] = None,
-        batch_size: int = 32,
-        metadata: Optional[Dict[str, Any]] = None,
-        # ✅ NUEVO: log (mismo patrón que preprocess)
-        log_dir=None,
-        log_name: str = "emotion_extractor.log",
-    ) -> None:
-        """
-        Extrae features emocionales y los guarda en un archivo PKL.
 
-        El PKL contiene:
-        {
-          "ids": Optional[List[Any]] (si se provee),
-          "X": np.ndarray (N, D),
-          "feature_names": List[str],
-          "num_samples": int,
-          "feature_dim": int,
-          "meta": Dict[str, Any]
-        }
+# =====================================================
+# Core extraction (batch)
+# =====================================================
+def _sorted_proba_keys(probas: Dict[str, float]) -> List[str]:
+    return sorted(probas.keys())
 
-        Logging:
-        - Si log_dir se especifica, escribe un .log con:
-          start/end, output_path, #samples, dim, batch_size, flags de config y errores.
-        """
-        import pickle
-        from pathlib import Path
 
-        t0 = time.time()
+def _probas_to_vec(probas: Dict[str, float], labels: List[str]) -> np.ndarray:
+    return np.array([float(probas.get(k, 0.0)) for k in labels], dtype=np.float32)
 
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        log_file = None
-        if log_dir is not None:
-            log_root = self._ensure_dir(log_dir)
-            log_file = str(Path(log_root) / log_name)
+def _predict_many(analyzer: Any, texts: List[str], batch_size: int, logger: logging.Logger) -> List[Any]:
+    """
+    Prefer predict_many if available; else try analyzer.predict(list); else loop.
 
-            self._append_log_line(log_file, "EmotionExtractor: START save_features_pkl")
-            self._append_log_line(
-                log_file,
-                self._format_kv(
-                    {
-                        "output_path": str(output_path),
-                        "num_texts": len(texts),
-                        "has_ids": ids is not None,
-                        "batch_size": batch_size,
-                        "lang": self.config.lang,
-                        "use_preprocess_tweet": self.config.use_preprocess_tweet,
-                        "normalize_signals_by": self.config.normalize_signals_by,
-                        "extra_signals": self.config.extra_signals,
-                        "num_intensifiers": len(self.intensifiers),
-                    }
-                ),
-            )
-            if metadata:
-                self._append_log_line(log_file, f"metadata_keys={list(metadata.keys())}")
+    Note:
+    - The real speedup comes from having the underlying HF model on CUDA
+      and using batch inference.
+    """
+    bs = max(int(batch_size), 1)
 
-        if ids is not None and len(ids) != len(texts):
-            msg = f"ids length ({len(ids)}) must match texts length ({len(texts)})."
-            if log_file:
-                self._append_log_line(log_file, f"ERROR: {msg}")
-                self._append_log_line(log_file, "EmotionExtractor: ABORT")
-            raise ValueError(msg)
-
+    # 1) predict_many
+    if hasattr(analyzer, "predict_many"):
         try:
-            X = self.extract_batch(texts, batch_size=batch_size)
-            feature_names = self.feature_names()
-
-            payload: Dict[str, Any] = {
-                "X": X,
-                "feature_names": feature_names,
-                "num_samples": int(X.shape[0]) if X.ndim == 2 else int(len(texts)),
-                "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
-                "meta": {**self.meta(), **(metadata or {})},
-            }
-            if ids is not None:
-                payload["ids"] = list(ids)
-
-            with open(output_path, "wb") as f:
-                pickle.dump(payload, f)
-
-            if log_file:
-                dt = time.time() - t0
-                self._append_log_line(
-                    log_file,
-                    self._format_kv(
-                        {
-                            "saved": output_path.name,
-                            "num_samples": payload["num_samples"],
-                            "feature_dim": payload["feature_dim"],
-                            "elapsed_sec": f"{dt:.3f}",
-                        }
-                    ),
-                )
-                self._append_log_line(log_file, "EmotionExtractor: END save_features_pkl")
-
+            return analyzer.predict_many(texts, batch_size=bs)  # type: ignore[misc]
         except Exception as e:
-            if log_file:
-                dt = time.time() - t0
-                self._append_log_line(log_file, f"ERROR: {type(e).__name__}: {e}")
-                self._append_log_line(log_file, f"elapsed_sec={dt:.3f}")
-                self._append_log_line(log_file, "EmotionExtractor: END (FAILED)")
-            raise
+            logger.info(f"predict_many not usable: {type(e).__name__}: {e}")
 
-    def extract_and_save_pkl(
-        self,
-        texts: List[str],
-        output_path,
-        ids: Optional[List[Any]] = None,
-        batch_size: int = 32,
-        metadata: Optional[Dict[str, Any]] = None,
-        # ✅ PASA LOGS
-        log_dir=None,
-        log_name: str = "emotion_extractor.log",
-    ) -> None:
-        """
-        Wrapper de alto nivel: extrae y guarda features emocionales en un PKL.
-        """
-        self.save_features_pkl(
-            texts=texts,
-            output_path=output_path,
-            ids=ids,
-            batch_size=batch_size,
-            metadata=metadata,
-            log_dir=log_dir,
-            log_name=log_name,
-        )
+    # 2) analyzer.predict(list)
+    try:
+        out = analyzer.predict(texts)  # type: ignore[misc]
+        if isinstance(out, list):
+            return out
+    except Exception:
+        pass
 
-    # -------------------------
-    # Internals
-    # -------------------------
+    # 3) fallback loop
+    preds: List[Any] = []
+    for i in range(0, len(texts), bs):
+        chunk = texts[i : i + bs]
+        for t in chunk:
+            preds.append(analyzer.predict(t))
+    return preds
 
-    def _set_labels_if_needed(self, emo_labels: List[str], sent_labels: List[str]) -> None:
-        changed = False
-        if self._emo_labels is None:
-            self._emo_labels = list(emo_labels)
-            changed = True
-        if self._sent_labels is None:
-            self._sent_labels = list(sent_labels)
-            changed = True
-        if changed:
-            self._feature_names = None
 
-    def _normalize_input(self, text: str) -> str:
-        text = (text or "").strip()
-        if not text:
-            return ""
-        if self.config.use_preprocess_tweet:
-            text = preprocess_tweet(text, lang=self.config.lang)
-        return text
+def extract_emotion_features(
+    df: pd.DataFrame,
+    cfg: ExtractConfig,
+    logger: logging.Logger,
+    text_col: str = "text_xlmr",
+) -> Dict[str, Any]:
+    """
+    Extract emotion + sentiment probabilities and signals for df rows.
 
-    def _emotion_probs(self, text: str) -> Tuple[np.ndarray, List[str]]:
-        pred = self.emotion_analyzer.predict(text or "")
-        labels = self._sorted_proba_keys(pred.probas)
-        vec = self._probas_to_vec(pred.probas, labels)
-        return vec, labels
+    Returns a dict with:
+      - emo_labels, sent_labels
+      - emo_mat, sent_mat, sig_mat (np.float32)
+      - device, batch_size, signal_names
+    """
+    if text_col not in df.columns:
+        raise ValueError(f"Missing required column '{text_col}'. Available: {list(df.columns)}")
 
-    def _sentiment_probs(self, text: str) -> Tuple[np.ndarray, List[str]]:
-        pred = self.sentiment_analyzer.predict(text or "")
-        labels = self._sorted_proba_keys(pred.probas)
-        vec = self._probas_to_vec(pred.probas, labels)
-        return vec, labels
+    device = _resolve_device(cfg.device, logger)
 
-    @staticmethod
-    def _sorted_proba_keys(probas: Dict[str, float]) -> List[str]:
-        return sorted(probas.keys())
+    intensifiers = cfg.intensifiers or DEFAULT_INTENSIFIERS
 
-    @staticmethod
-    def _probas_to_vec(probas: Dict[str, float], labels: List[str]) -> np.ndarray:
-        return np.array([float(probas.get(k, 0.0)) for k in labels], dtype=np.float32)
+    logger.info(f"Loading pysentimiento analyzers: lang={cfg.lang}")
+    emo_an = create_analyzer(task="emotion", lang=cfg.lang)
+    sent_an = create_analyzer(task="sentiment", lang=cfg.lang)
 
-    def _predict_many(self, analyzer, texts: List[str], batch_size: int = 32):
-        """
-        Intenta hacer predicción en batch si el analyzer lo soporta.
-        Si no, cae a loop.
-        """
-        if hasattr(analyzer, "predict"):
-            try:
-                out = analyzer.predict(texts)  # type: ignore[misc]
-                if isinstance(out, list):
-                    return out
-            except Exception:
-                pass
+    # Try to move models to CUDA (best-effort)
+    _try_move_analyzer_to_device(emo_an, device, logger)
+    _try_move_analyzer_to_device(sent_an, device, logger)
 
-        preds = []
-        for i in range(0, len(texts), max(batch_size, 1)):
-            chunk = texts[i : i + batch_size]
-            for t in chunk:
-                preds.append(analyzer.predict(t))
-        return preds
+    texts = df[text_col].fillna("").astype(str).tolist()
+    if cfg.use_preprocess_tweet:
+        texts = [preprocess_tweet(t, lang=cfg.lang) for t in texts]
 
-    def _signals(self, text: str) -> np.ndarray:
-        tokens = re.findall(r"\w+", (text or "").lower())
-        num_tokens = max(len(tokens), 1)
-        num_chars = max(len(text), 1)
+    logger.info(f"Extracting emotion/sentiment: N={len(texts)} | batch_size={cfg.batch_size} | device={device}")
 
-        denom = num_chars if self.config.normalize_signals_by == "chars" else num_tokens
+    # Inference mode (avoid autograd overhead)
+    if torch is not None and hasattr(torch, "inference_mode"):
+        ctx = torch.inference_mode()  # type: ignore[attr-defined]
+    elif torch is not None:
+        ctx = torch.no_grad()
+    else:
+        ctx = None
 
-        exclam = (text or "").count("!")
-        question = (text or "").count("?")
+    if ctx is not None:
+        with ctx:
+            emo_preds = _predict_many(emo_an, texts, cfg.batch_size, logger)
+            sent_preds = _predict_many(sent_an, texts, cfg.batch_size, logger)
+    else:
+        emo_preds = _predict_many(emo_an, texts, cfg.batch_size, logger)
+        sent_preds = _predict_many(sent_an, texts, cfg.batch_size, logger)
 
-        exclam_ratio = exclam / max(denom, 1)
-        question_ratio = question / max(denom, 1)
+    if not emo_preds or not sent_preds:
+        raise RuntimeError("No predictions returned by analyzers.")
 
-        uppercase_ratio = self._uppercase_ratio(text or "")
-        emoji_ratio = self._emoji_ratio(text or "")
-        intensifier_ratio = self._intensifier_ratio(tokens)
+    emo_labels = _sorted_proba_keys(emo_preds[0].probas)
+    sent_labels = _sorted_proba_keys(sent_preds[0].probas)
 
-        base = np.array(
-            [exclam_ratio, question_ratio, uppercase_ratio, emoji_ratio, intensifier_ratio],
-            dtype=np.float32,
-        )
+    emo_mat = np.vstack([_probas_to_vec(p.probas, emo_labels) for p in emo_preds]).astype(np.float32)
+    sent_mat = np.vstack([_probas_to_vec(p.probas, sent_labels) for p in sent_preds]).astype(np.float32)
 
-        if not self.config.extra_signals:
-            return base
-
-        punct_ratio = self._punct_ratio(text or "")
-        digit_ratio = self._digit_ratio(text or "")
-
-        repeat_exclam_ratio = self._repeat_punct_ratio(text or "", r"!{2,}", denom)
-        repeat_question_ratio = self._repeat_punct_ratio(text or "", r"\?{2,}", denom)
-
-        elipsis_ratio = self._repeat_punct_ratio(text or "", r"\.{3,}", denom)
-        quote_ratio = self._quote_ratio(text or "")
-
-        extra = np.array(
-            [
-                float(num_chars),
-                float(num_tokens),
-                punct_ratio,
-                digit_ratio,
-                repeat_exclam_ratio,
-                repeat_question_ratio,
-                elipsis_ratio,
-                quote_ratio,
-            ],
-            dtype=np.float32,
-        )
-
-        return np.concatenate([base, extra]).astype(np.float32)
-
-    def _signal_feature_names(self) -> List[str]:
-        names = [
-            "sig_exclam_ratio",
-            "sig_question_ratio",
-            "sig_uppercase_ratio",
-            "sig_emoji_ratio",
-            "sig_intensifier_ratio",
+    sig_mat = np.vstack(
+        [
+            _signals(
+                t,
+                intensifiers=intensifiers,
+                normalize_signals_by=cfg.normalize_signals_by,
+                extra_signals=cfg.extra_signals,
+            )
+            for t in texts
         ]
-        if not self.config.extra_signals:
-            return names
-        names += [
-            "sig_len_chars",
-            "sig_len_tokens",
-            "sig_punct_ratio",
-            "sig_digit_ratio",
-            "sig_repeat_exclam_ratio",
-            "sig_repeat_question_ratio",
-            "sig_elipsis_ratio",
-            "sig_quote_ratio",
-        ]
-        return names
+    ).astype(np.float32)
 
-    @staticmethod
-    def _uppercase_ratio(text: str) -> float:
-        uppercase = sum(1 for c in text if c.isupper())
-        letters = sum(1 for c in text if c.isalpha())
-        return float(uppercase) / max(letters, 1)
+    emo_mat = _safe(emo_mat, cfg.safe_numeric)
+    sent_mat = _safe(sent_mat, cfg.safe_numeric)
+    sig_mat = _safe(sig_mat, cfg.safe_numeric)
 
-    @staticmethod
-    def _emoji_ratio(text: str) -> float:
-        emojis = [c for c in text if c in emoji.EMOJI_DATA]
-        return float(len(emojis)) / max(len(text.split()), 1)
+    return {
+        "emo_labels": emo_labels,
+        "sent_labels": sent_labels,
+        "emo_mat": emo_mat,
+        "sent_mat": sent_mat,
+        "sig_mat": sig_mat,
+        "signal_names": signal_feature_names(cfg.extra_signals),
+        "device": device,
+        "batch_size": cfg.batch_size,
+        "normalize_signals_by": cfg.normalize_signals_by,
+        "use_preprocess_tweet": cfg.use_preprocess_tweet,
+    }
 
-    def _intensifier_ratio(self, tokens_lower: List[str]) -> float:
-        matches = sum(1 for t in tokens_lower if t in self.intensifiers)
-        return float(matches) / max(len(tokens_lower), 1)
 
-    @staticmethod
-    def _punct_ratio(text: str) -> float:
-        if not text:
-            return 0.0
-        punct = sum(1 for c in text if (not c.isalnum() and not c.isspace()))
-        return float(punct) / max(len(text), 1)
+# =====================================================
+# PKL split helpers (same pattern)
+# =====================================================
+def _resolve_split_file(input_dir: Path, split: str) -> Path:
+    candidates = {
+        "train": ["train.pkl"],
+        "val": ["val.pkl", "development.pkl", "dev.pkl", "valid.pkl", "validation.pkl"],
+        "test": ["test.pkl"],
+    }
+    if split not in candidates:
+        raise ValueError(f"Unsupported split: {split}")
 
-    @staticmethod
-    def _digit_ratio(text: str) -> float:
-        if not text:
-            return 0.0
-        digits = sum(1 for c in text if c.isdigit())
-        return float(digits) / max(len(text), 1)
+    for fname in candidates[split]:
+        p = input_dir / fname
+        if p.exists():
+            return p
 
-    @staticmethod
-    def _repeat_punct_ratio(text: str, pattern: str, denom: int) -> float:
-        if not text:
-            return 0.0
-        repeats = len(re.findall(pattern, text))
-        return float(repeats) / max(denom, 1)
+    return input_dir / candidates[split][0]
 
-    @staticmethod
-    def _quote_ratio(text: str) -> float:
-        if not text:
-            return 0.0
-        quotes = text.count('"') + text.count("“") + text.count("”") + text.count("'")
-        return float(quotes) / max(len(text), 1)
 
-    def _safe(self, x: np.ndarray) -> np.ndarray:
-        if not self.config.safe_numeric:
-            return x
-        return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+def _save_features_pkl(
+    original_df: pd.DataFrame,
+    payload: Dict[str, Any],
+    output_pkl: Path,
+    logger: logging.Logger,
+) -> Path:
+    """
+    Save a new PKL with emotion features.
+    """
+    emo_mat: np.ndarray = payload["emo_mat"]
+    sent_mat: np.ndarray = payload["sent_mat"]
+    sig_mat: np.ndarray = payload["sig_mat"]
+
+    out_df = pd.DataFrame()
+
+    if "Id" in original_df.columns:
+        out_df["Id"] = original_df["Id"].values
+
+    if "label" in original_df.columns:
+        out_df["label"] = original_df["label"].values
+    elif "Category" in original_df.columns:
+        out_df["label"] = original_df["Category"].values
+
+    # Store lists for pickle friendliness
+    out_df["emo_probs"] = [emo_mat[i].tolist() for i in range(emo_mat.shape[0])]
+    out_df["sent_probs"] = [sent_mat[i].tolist() for i in range(sent_mat.shape[0])]
+    out_df["signals"] = [sig_mat[i].tolist() for i in range(sig_mat.shape[0])]
+
+    # Metadata columns (stable per file)
+    out_df["emo_labels"] = [payload["emo_labels"]] * len(out_df)
+    out_df["sent_labels"] = [payload["sent_labels"]] * len(out_df)
+    out_df["signal_names"] = [payload["signal_names"]] * len(out_df)
+
+    out_df["device"] = payload["device"]
+    out_df["batch_size"] = payload["batch_size"]
+    out_df["normalize_signals_by"] = payload["normalize_signals_by"]
+    out_df["use_preprocess_tweet"] = payload["use_preprocess_tweet"]
+
+    output_pkl.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_pickle(output_pkl)
+    logger.info(f"Features PKL created: {output_pkl.resolve()}")
+    return output_pkl
+
+
+# =====================================================
+# Public API: extract for train/val/test
+# =====================================================
+def extract_emotion_features_for_splits(
+    input_dir: Path,
+    output_dir: Path,
+    log_dir: Path,
+    text_col: str = "text_xlmr",
+    batch_size: int = 32,
+    device: str = "cpu",
+    num_workers: int = 0,  # kept for interface parity; not used here
+    use_preprocess_tweet: bool = False,
+    normalize_signals_by: str = "chars",
+    extra_signals: bool = True,
+) -> None:
+    """
+    Extract and save emotion features for train/val/test splits.
+
+    Reads:
+      input_dir/train.pkl
+      input_dir/val.pkl (or development.pkl)
+      input_dir/test.pkl
+
+    Writes:
+      output_dir/train_features.pkl
+      output_dir/val_features.pkl
+      output_dir/test_features.pkl
+    """
+    logger = get_logger(log_dir=log_dir)
+
+    cfg = ExtractConfig(
+        lang="es",
+        batch_size=batch_size,
+        device=device,
+        use_preprocess_tweet=use_preprocess_tweet,
+        normalize_signals_by=normalize_signals_by,
+        extra_signals=extra_signals,
+        safe_numeric=True,
+        intensifiers=None,
+    )
+
+    try:
+        input_dir = Path(input_dir)
+        output_dir = Path(output_dir)
+
+        logger.info("Starting emotion feature extraction")
+        logger.info(f"Input dir: {input_dir.resolve()}")
+        logger.info(f"Output dir: {output_dir.resolve()}")
+        logger.info(f"Text col: {text_col}")
+        logger.info(f"Batch size: {cfg.batch_size}")
+        logger.info(f"Device (requested): {device}")
+
+        train_pkl = _resolve_split_file(input_dir, "train")
+        val_pkl = _resolve_split_file(input_dir, "val")
+        test_pkl = _resolve_split_file(input_dir, "test")
+
+        for p in [train_pkl, val_pkl, test_pkl]:
+            if not p.exists():
+                raise FileNotFoundError(f"Missing split file: {p}")
+
+        # Train
+        logger.info(f"Loading split: train ({train_pkl.name})")
+        df_train = pd.read_pickle(train_pkl)
+        payload_train = extract_emotion_features(df_train, cfg=cfg, logger=logger, text_col=text_col)
+        _save_features_pkl(df_train, payload_train, output_dir / "train_features.pkl", logger)
+
+        # Val
+        logger.info(f"Loading split: val ({val_pkl.name})")
+        df_val = pd.read_pickle(val_pkl)
+        payload_val = extract_emotion_features(df_val, cfg=cfg, logger=logger, text_col=text_col)
+        _save_features_pkl(df_val, payload_val, output_dir / "val_features.pkl", logger)
+
+        # Test
+        logger.info(f"Loading split: test ({test_pkl.name})")
+        df_test = pd.read_pickle(test_pkl)
+        payload_test = extract_emotion_features(df_test, cfg=cfg, logger=logger, text_col=text_col)
+        _save_features_pkl(df_test, payload_test, output_dir / "test_features.pkl", logger)
+
+        logger.info("Emotion feature extraction completed")
+
+    finally:
+        _flush_and_close_logger(logger)
