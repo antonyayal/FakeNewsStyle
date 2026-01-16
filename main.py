@@ -17,9 +17,15 @@ from src.data.convert_xlsx_to_pkl import convert_folder_xlsx_to_pkl
 from src.experiments.run_experiment import run_train, run_test, run_train_test
 from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
-from src.features.emotion_extractor import EmotionExtractor, EmotionExtractorConfig
+from src.features.emotion_extractor import extract_emotion_features_for_splits
 from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
 from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
+
+# Optional torch: for CUDA detection messaging (EmotionExtractor already handles device)
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover
+    torch = None  # type: ignore
 
 
 # =====================================================
@@ -90,38 +96,154 @@ def _ensure_dir(p: Path) -> Path:
     return p
 
 
+def _resolve_emotion_device(requested: str) -> str:
+    """
+    Normaliza device para EmotionExtractorConfig:
+    - "cuda" si se pidió cuda y hay CUDA disponible
+    - si no, "cpu"
+    """
+    req = (requested or "cpu").lower().strip()
+    if req not in {"cpu", "cuda"}:
+        req = "cpu"
+
+    if req == "cuda":
+        if torch is not None and torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
+
+    return "cpu"
+
+
 # =====================================================
 # Argument parser (GLOBAL)  -> SOLO se define una vez
 # =====================================================
 parser = argparse.ArgumentParser(description="FakeNewsStyle Main Entry Point")
 
 # ---- corpus
-parser.add_argument("--prepare_corpus", type=int, default=0, help="Prepare corpus from raw to processed (0 = No, 1 = Yes)")
+parser.add_argument(
+    "--prepare_corpus",
+    type=int,
+    default=0,
+    help="Prepare corpus from raw to processed (0 = No, 1 = Yes)",
+)
 
 # ---- run
-parser.add_argument("--mode", type=str, default=None, choices=["train", "test", "train_test"], help="Execution mode: train | test | train_test")
-parser.add_argument("--config", type=str, default=None, help="Path to experiment config (json/yaml) used by Run/M3FEND")
-parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint path (required for --mode test)")
-parser.add_argument("--out_dir", type=str, default="./runs", help="Directory to store run artifacts (metrics/ckpt pointers)")
+parser.add_argument(
+    "--mode",
+    type=str,
+    default=None,
+    choices=["train", "test", "train_test"],
+    help="Execution mode: train | test | train_test",
+)
+parser.add_argument(
+    "--config",
+    type=str,
+    default=None,
+    help="Path to experiment config (json/yaml) used by Run/M3FEND",
+)
+parser.add_argument(
+    "--ckpt",
+    type=str,
+    default=None,
+    help="Checkpoint path (required for --mode test)",
+)
+parser.add_argument(
+    "--out_dir",
+    type=str,
+    default="./runs",
+    help="Directory to store run artifacts (metrics/ckpt pointers)",
+)
 
 # ---- preprocess
-parser.add_argument("--preprocess_text", type=int, default=0, help="Preprocess text for XLM-RoBERTa (0 = No, 1 = Yes)")
-parser.add_argument("--preprocess_input_dir", type=str, default=None, help="Input dir with train/val/test PKLs (defaults to processed_to_PKL/FakeNewsCorpusSpanish)")
-parser.add_argument("--preprocess_output_dir", type=str, default=None, help="Output dir for preprocessed PKLs (defaults to processed_by_model/FakeNewsCorpusSpanish)")
-# Base log folder (solo para preprocess como ya lo tenías)
-parser.add_argument("--log_dir", type=str, default="logs/preprocess", help="Directory to store preprocessing logs")
+parser.add_argument(
+    "--preprocess_text",
+    type=int,
+    default=0,
+    help="Preprocess text for XLM-RoBERTa (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--preprocess_input_dir",
+    type=str,
+    default=None,
+    help="Input dir with train/val/test PKLs (defaults to processed_to_PKL/FakeNewsCorpusSpanish)",
+)
+parser.add_argument(
+    "--preprocess_output_dir",
+    type=str,
+    default=None,
+    help="Output dir for preprocessed PKLs (defaults to processed_by_model/FakeNewsCorpusSpanish)",
+)
+parser.add_argument(
+    "--log_dir",
+    type=str,
+    default="logs/preprocess",
+    help="Directory to store preprocessing logs",
+)
 
 # ---- semantic
-parser.add_argument("--extract_semantic", type=int, default=0, help="Extract semantic features using XLM-R (0 = No, 1 = Yes)")
-parser.add_argument("--semantic_pooling", type=str, default="mean", choices=["mean", "cls", "attention"], help="Pooling strategy for semantic extractor")
-parser.add_argument("--semantic_device", type=str, default="cpu", help="Device for semantic extractor: cpu | cuda")
+parser.add_argument(
+    "--extract_semantic",
+    type=int,
+    default=0,
+    help="Extract semantic features using XLM-R (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--semantic_pooling",
+    type=str,
+    default="mean",
+    choices=["mean", "cls", "attention"],
+    help="Pooling strategy for semantic extractor",
+)
+parser.add_argument(
+    "--semantic_device",
+    type=str,
+    default="cpu",
+    help="Device for semantic extractor: cpu | cuda",
+)
 
 # ---- emotion
-parser.add_argument("--extract_emotion", type=int, default=0, help="Extract emotion features using pysentimiento (0 = No, 1 = Yes)")
-parser.add_argument("--emotion_use_preprocess_tweet", type=int, default=0, help="Apply pysentimiento preprocess_tweet (0 = No, 1 = Yes)")
-parser.add_argument("--emotion_input_dir", type=str, default=None, help="Input dir for emotion (defaults to processed_by_model if exists else processed_to_PKL)")
-parser.add_argument("--emotion_text_column", type=str, default="Text", help="Text column for emotion extractor (your DF uses: Headline or Text)")
-parser.add_argument("--emotion_id_column", type=str, default="Id", help="ID column for alignment (your DF uses: Id)")
+parser.add_argument(
+    "--extract_emotion",
+    type=int,
+    default=0,
+    help="Extract emotion features using pysentimiento (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--emotion_device",
+    type=str,
+    default="cpu",
+    help="Device for emotion extractor: cpu | cuda",
+)
+parser.add_argument(
+    "--emotion_batch_size",
+    type=int,
+    default=32,
+    help="Batch size for emotion extractor",
+)
+parser.add_argument(
+    "--emotion_use_preprocess_tweet",
+    type=int,
+    default=0,
+    help="Apply pysentimiento preprocess_tweet (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--emotion_input_dir",
+    type=str,
+    default=None,
+    help="Input dir for emotion (defaults to processed_by_model if exists else processed_to_PKL)",
+)
+parser.add_argument(
+    "--emotion_text_column",
+    type=str,
+    default="Text",
+    help="Text column for emotion extractor (your DF uses: Headline or Text)",
+)
+parser.add_argument(
+    "--emotion_id_column",
+    type=str,
+    default="Id",
+    help="ID column for alignment (your DF uses: Id)",
+)
 
 # ---- style
 parser.add_argument("--extract_style", type=int, default=0, help="Extract style features using spaCy/textstat/wordfreq (0 = No, 1 = Yes)")
@@ -173,16 +295,47 @@ LOGS_CONTEXT_DIR = _ensure_dir(LOGS_FEATURES_DIR / "context")
 
 
 # =====================================================
-# Step 1: Prepare corpus
+# Step 1: Prepare corpus (WITH LOG)
 # =====================================================
 if args.prepare_corpus == 1:
+    from datetime import datetime
+
+    log_dir_step1 = _ensure_dir(BASE_DIR / "logs" / "prepare_corpus")
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = log_dir_step1 / f"prepare_corpus_{timestamp}.log"
+
+    def _log(msg: str):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+
     print("Preparing corpus from raw to processed")
-    generated = convert_folder_xlsx_to_pkl(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR)
-    for p in generated:
-        print(f"Saved: {p.name}")
-    print("Corpus preparation completed")
+    _log("PrepareCorpus: START")
+    _log(f"raw_dir={RAW_DIR}")
+    _log(f"processed_dir={PROCESSED_DIR}")
+
+    try:
+        generated = convert_folder_xlsx_to_pkl(
+            raw_dir=RAW_DIR,
+            processed_dir=PROCESSED_DIR,
+        )
+
+        for p in generated:
+            print(f"Saved: {p.name}")
+            _log(f"saved_file={p.name}")
+
+        _log(f"num_files_generated={len(generated)}")
+        _log("PrepareCorpus: END (SUCCESS)")
+        print("Corpus preparation completed")
+
+    except Exception as e:
+        _log(f"ERROR: {type(e).__name__}: {e}")
+        _log("PrepareCorpus: END (FAILED)")
+        raise
+
 else:
     print("Corpus preparation skipped")
+
 
 
 # =====================================================
@@ -209,7 +362,6 @@ if args.extract_semantic == 1:
     input_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
     output_dir = BASE_DIR / "data" / "features" / "semantic" / "FakeNewsCorpusSpanish"
 
-    # ✅ MISMO PARADIGMA: pasamos un log_dir real (absoluto) a la función
     extract_semantic_features_for_splits(
         input_dir=input_dir,
         output_dir=output_dir,
@@ -230,49 +382,26 @@ else:
 if args.extract_emotion == 1:
     print("Extracting emotion features (pysentimiento)")
 
-    emotion_input_dir = _default_input_dir(args.emotion_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
+    emotion_input_dir = _default_input_dir(
+        args.emotion_input_dir,
+        PROCESSED_BY_MODEL_DIR,
+        PROCESSED_DIR,
+    )
+
     emotion_output_dir = BASE_DIR / "data" / "features" / "emotion" / "FakeNewsCorpusSpanish"
     emotion_output_dir.mkdir(parents=True, exist_ok=True)
 
-    extractor = EmotionExtractor(
-        EmotionExtractorConfig(
-            lang="es",
-            use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
-        )
+    extract_emotion_features_for_splits(
+        input_dir=emotion_input_dir,
+        output_dir=emotion_output_dir,
+        log_dir=LOGS_EMOTION_DIR,
+        text_col=args.emotion_text_column,          # ⚠️ usa text_xlmr si vienes de preprocess
+        batch_size=int(args.emotion_batch_size),
+        device=args.emotion_device,                 # "cuda" | "cpu"
+        use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
+        normalize_signals_by="chars",
+        extra_signals=True,
     )
-
-    splits = {"train": "train.pkl", "val": "val.pkl", "test": "test.pkl"}
-
-    for split_name, filename in splits.items():
-        in_path = emotion_input_dir / filename
-        if not in_path.exists():
-            print(f"Skipped (missing): {in_path}")
-            continue
-
-        obj = _load_pkl_any(in_path)
-        texts, ids = _extract_texts_and_ids_from_obj(obj, args.emotion_text_column, args.emotion_id_column)
-
-        out_path = emotion_output_dir / f"{split_name}_emotion.pkl"
-
-        # ✅ MISMO PARADIGMA: el módulo debe recibir log_dir y escribir su log
-        # Requiere que tu EmotionExtractor soporte estos args.
-        extractor.extract_and_save_pkl(
-            texts=texts,
-            ids=ids,
-            output_path=out_path,
-            batch_size=32,
-            metadata={
-                "dataset": "FakeNewsCorpusSpanish",
-                "split": split_name,
-                "source_pkl": str(in_path),
-                "text_column": args.emotion_text_column,
-                "id_column": args.emotion_id_column,
-            },
-            log_dir=LOGS_EMOTION_DIR,
-            log_name=f"emotion_{split_name}.log",
-        )
-
-        print(f"Saved emotion features: {out_path.name} | samples={len(texts)}")
 
     print("Emotion feature extraction completed")
 else:
@@ -314,8 +443,6 @@ if args.extract_style == 1:
 
         out_path = style_output_dir / f"{split_name}_style.pkl"
 
-        # ✅ MISMO PARADIGMA: pasar log_dir para que el módulo escriba logs
-        # Requiere que tu StyleExtractor soporte estos args.
         style_extractor.save_features_pkl(
             texts=texts,
             ids=ids,
@@ -391,8 +518,6 @@ if args.extract_context == 1:
 
         out_path = context_output_dir / f"{split_name}_context.pkl"
 
-        # ✅ MISMO PARADIGMA: pasar log_dir para que el módulo escriba logs
-        # Requiere que tu ContextExtractor soporte estos args.
         ctx_extractor.save_features_pkl(
             rows=rows,
             ids=ids,
@@ -425,19 +550,16 @@ else:
 def main():
     print("FakeNewsStyle main initialized")
 
-    # If no mode provided, do nothing else
     if args.mode is None:
         print("No --mode provided. Exiting.")
         return
 
-    # Basic validation
     if args.config is None:
         raise ValueError("--config is required when using --mode")
 
     if args.mode == "test" and not args.ckpt:
         raise ValueError("--ckpt is required when --mode test")
 
-    # Dispatch
     if args.mode == "train":
         best_ckpt = run_train(config_path=args.config, out_dir=args.out_dir)
         print(best_ckpt or "")
