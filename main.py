@@ -20,6 +20,8 @@ from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import extract_emotion_features_for_splits
 from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
 from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
+from src.features.feature_merger import merge_features_for_splits
+
 
 # Optional torch: for CUDA detection messaging (EmotionExtractor already handles device)
 try:
@@ -274,6 +276,45 @@ parser.add_argument("--context_topic_dim", type=int, default=16, help="Hash-embe
 parser.add_argument("--context_author_dim", type=int, default=16, help="Hash-embedding dim for Author (if available)")
 parser.add_argument("--context_n_hashes", type=int, default=2, help="Number of hashes per field for hash embeddings")
 parser.add_argument("--context_unsigned", type=int, default=0, help="Disable signed hashing (0 = signed, 1 = unsigned)")
+
+# ---- merge (feature fusion)
+parser.add_argument(
+    "--merge_features",
+    type=int,
+    default=0,
+    help="Merge semantic+emotion+style+context features into a single PKL per split (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--merge_output_dir",
+    type=str,
+    default=None,
+    help="Output dir for merged features (defaults to data/features/merged/FakeNewsCorpusSpanish)",
+)
+parser.add_argument(
+    "--merge_missing_policy",
+    type=str,
+    default="fill_zero",
+    choices=["fill_zero", "drop", "error"],
+    help="Policy when an Id is missing in any feature block: fill_zero | drop | error",
+)
+parser.add_argument(
+    "--merge_add_presence_flags",
+    type=int,
+    default=1,
+    help="Append has_sem/has_emo/has_sty/has_ctx flags (0 = No, 1 = Yes)",
+)
+parser.add_argument(
+    "--merge_log_dir",
+    type=str,
+    default="logs/features/merge",
+    help="Directory to store merge logs (same pattern as other modules)",
+)
+parser.add_argument(
+    "--merge_emotion_alt",
+    type=int,
+    default=1,
+    help="Also try alternate emotion filenames train_emotion.pkl/val_emotion.pkl/test_emotion.pkl if train_features.pkl not found (0 = No, 1 = Yes)",
+)
 
 # ---- parse ONCE
 args = parser.parse_args()
@@ -543,6 +584,51 @@ if args.extract_context == 1:
 else:
     print("Context feature extraction skipped")
 
+# =====================================================
+# Step 7: Merge features (agrega esto después del Step 6 Context)
+# =====================================================
+if args.merge_features == 1:
+    print("Merging feature PKLs (sem ⊕ emo ⊕ sty ⊕ ctx)")
+
+    semantic_dir = BASE_DIR / "data" / "features" / "semantic" / "FakeNewsCorpusSpanish"
+    emotion_dir = BASE_DIR / "data" / "features" / "emotion" / "FakeNewsCorpusSpanish"
+    style_dir = BASE_DIR / "data" / "features" / "style" / "FakeNewsCorpusSpanish"
+    context_dir = BASE_DIR / "data" / "features" / "context" / "FakeNewsCorpusSpanish"
+
+    merge_output_dir = (
+        Path(args.merge_output_dir)
+        if args.merge_output_dir
+        else (BASE_DIR / "data" / "features" / "merged" / "FakeNewsCorpusSpanish")
+    )
+    merge_output_dir.mkdir(parents=True, exist_ok=True)
+
+    merge_log_dir = BASE_DIR / args.merge_log_dir
+    merge_log_dir.mkdir(parents=True, exist_ok=True)
+
+    # If your emotion extractor sometimes outputs train_emotion.pkl instead of train_features.pkl
+    emotion_alt_files = None
+    if int(args.merge_emotion_alt) == 1:
+        emotion_alt_files = {
+            "train": "train_emotion.pkl",
+            "val": "val_emotion.pkl",
+            "test": "test_emotion.pkl",
+        }
+
+    merge_features_for_splits(
+        semantic_dir=semantic_dir,
+        emotion_dir=emotion_dir,
+        style_dir=style_dir,
+        context_dir=context_dir,
+        output_dir=merge_output_dir,
+        log_dir=merge_log_dir,
+        missing_policy=args.merge_missing_policy,
+        add_presence_flags=(int(args.merge_add_presence_flags) == 1),
+        emotion_alt_files=emotion_alt_files,
+    )
+
+    print("Feature merge completed")
+else:
+    print("Feature merge skipped")
 
 # =====================================================
 # Main (training/testing only)
