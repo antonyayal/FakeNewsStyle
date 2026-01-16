@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -99,6 +100,32 @@ class EmotionExtractor:
         self._feature_names: Optional[List[str]] = None
 
     # -------------------------
+    # Logging helpers (igual paradigma que preprocess: escribir en logs/)
+    # -------------------------
+
+    @staticmethod
+    def _ensure_dir(p):
+        from pathlib import Path
+
+        pp = Path(p)
+        pp.mkdir(parents=True, exist_ok=True)
+        return pp
+
+    @staticmethod
+    def _append_log_line(log_file, msg: str) -> None:
+        from datetime import datetime
+        from pathlib import Path
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+
+    @staticmethod
+    def _format_kv(d: Dict[str, Any]) -> str:
+        return " | ".join([f"{k}={v}" for k, v in d.items()])
+
+    # -------------------------
     # Public API
     # -------------------------
 
@@ -128,7 +155,6 @@ class EmotionExtractor:
     def extract_dict(self, text: str) -> Dict[str, float]:
         """
         Devuelve un dict {feature_name: value} para 1 texto.
-        Útil para debugging, logs, o para alinear con un pipeline tipo placeholder.
         """
         vec, names = self.extract_with_names(text)
         return {k: float(v) for k, v in zip(names, vec)}
@@ -137,25 +163,19 @@ class EmotionExtractor:
         """
         Extrae features para una lista de textos.
         Regresa matriz shape: (N, D).
-
-        Implementa batching a nivel "predicción" cuando es posible.
         """
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
 
-        # Normaliza primero
         texts_n = [self._normalize_input(t) for t in texts]
 
-        # Predicciones por lotes (si la lib lo soporta, lo usamos; si no, caemos a loop)
         emo_preds = self._predict_many(self.emotion_analyzer, texts_n, batch_size=batch_size)
         sent_preds = self._predict_many(self.sentiment_analyzer, texts_n, batch_size=batch_size)
 
-        # Inferimos labels una sola vez de la primera pred
         emo_labels = self._sorted_proba_keys(emo_preds[0].probas) if emo_preds else []
         sent_labels = self._sorted_proba_keys(sent_preds[0].probas) if sent_preds else []
         self._set_labels_if_needed(emo_labels, sent_labels)
 
-        # Construimos matrices
         emo_mat = np.vstack([self._probas_to_vec(p.probas, emo_labels) for p in emo_preds]).astype(np.float32)
         sent_mat = np.vstack([self._probas_to_vec(p.probas, sent_labels) for p in sent_preds]).astype(np.float32)
         sig_mat = np.vstack([self._signals(t) for t in texts_n]).astype(np.float32)
@@ -166,12 +186,10 @@ class EmotionExtractor:
     def feature_names(self) -> List[str]:
         """
         Devuelve los nombres de features en el mismo orden del vector.
-        Requiere que ya se hayan inferido labels en alguna extracción.
         """
         if self._feature_names is not None:
             return self._feature_names
 
-        # Si aún no hay labels, intentamos inferirlas con un texto mínimo.
         if self._emo_labels is None or self._sent_labels is None:
             _ = self.extract("test")
 
@@ -200,7 +218,7 @@ class EmotionExtractor:
         }
 
     # -------------------------
-    # Persistence (PKL output)
+    # Persistence (PKL output) + LOG
     # -------------------------
 
     def save_features_pkl(
@@ -210,6 +228,9 @@ class EmotionExtractor:
         ids: Optional[List[Any]] = None,
         batch_size: int = 32,
         metadata: Optional[Dict[str, Any]] = None,
+        # ✅ NUEVO: log (mismo patrón que preprocess)
+        log_dir=None,
+        log_name: str = "emotion_extractor.log",
     ) -> None:
         """
         Extrae features emocionales y los guarda en un archivo PKL.
@@ -223,31 +244,90 @@ class EmotionExtractor:
           "feature_dim": int,
           "meta": Dict[str, Any]
         }
+
+        Logging:
+        - Si log_dir se especifica, escribe un .log con:
+          start/end, output_path, #samples, dim, batch_size, flags de config y errores.
         """
         import pickle
         from pathlib import Path
 
-        if ids is not None and len(ids) != len(texts):
-            raise ValueError(f"ids length ({len(ids)}) must match texts length ({len(texts)}).")
+        t0 = time.time()
 
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        X = self.extract_batch(texts, batch_size=batch_size)
-        feature_names = self.feature_names()
+        log_file = None
+        if log_dir is not None:
+            log_root = self._ensure_dir(log_dir)
+            log_file = str(Path(log_root) / log_name)
 
-        payload: Dict[str, Any] = {
-            "X": X,
-            "feature_names": feature_names,
-            "num_samples": int(X.shape[0]),
-            "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
-            "meta": {**self.meta(), **(metadata or {})},
-        }
-        if ids is not None:
-            payload["ids"] = list(ids)
+            self._append_log_line(log_file, "EmotionExtractor: START save_features_pkl")
+            self._append_log_line(
+                log_file,
+                self._format_kv(
+                    {
+                        "output_path": str(output_path),
+                        "num_texts": len(texts),
+                        "has_ids": ids is not None,
+                        "batch_size": batch_size,
+                        "lang": self.config.lang,
+                        "use_preprocess_tweet": self.config.use_preprocess_tweet,
+                        "normalize_signals_by": self.config.normalize_signals_by,
+                        "extra_signals": self.config.extra_signals,
+                        "num_intensifiers": len(self.intensifiers),
+                    }
+                ),
+            )
+            if metadata:
+                self._append_log_line(log_file, f"metadata_keys={list(metadata.keys())}")
 
-        with open(output_path, "wb") as f:
-            pickle.dump(payload, f)
+        if ids is not None and len(ids) != len(texts):
+            msg = f"ids length ({len(ids)}) must match texts length ({len(texts)})."
+            if log_file:
+                self._append_log_line(log_file, f"ERROR: {msg}")
+                self._append_log_line(log_file, "EmotionExtractor: ABORT")
+            raise ValueError(msg)
+
+        try:
+            X = self.extract_batch(texts, batch_size=batch_size)
+            feature_names = self.feature_names()
+
+            payload: Dict[str, Any] = {
+                "X": X,
+                "feature_names": feature_names,
+                "num_samples": int(X.shape[0]) if X.ndim == 2 else int(len(texts)),
+                "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
+                "meta": {**self.meta(), **(metadata or {})},
+            }
+            if ids is not None:
+                payload["ids"] = list(ids)
+
+            with open(output_path, "wb") as f:
+                pickle.dump(payload, f)
+
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(
+                    log_file,
+                    self._format_kv(
+                        {
+                            "saved": output_path.name,
+                            "num_samples": payload["num_samples"],
+                            "feature_dim": payload["feature_dim"],
+                            "elapsed_sec": f"{dt:.3f}",
+                        }
+                    ),
+                )
+                self._append_log_line(log_file, "EmotionExtractor: END save_features_pkl")
+
+        except Exception as e:
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(log_file, f"ERROR: {type(e).__name__}: {e}")
+                self._append_log_line(log_file, f"elapsed_sec={dt:.3f}")
+                self._append_log_line(log_file, "EmotionExtractor: END (FAILED)")
+            raise
 
     def extract_and_save_pkl(
         self,
@@ -256,6 +336,9 @@ class EmotionExtractor:
         ids: Optional[List[Any]] = None,
         batch_size: int = 32,
         metadata: Optional[Dict[str, Any]] = None,
+        # ✅ PASA LOGS
+        log_dir=None,
+        log_name: str = "emotion_extractor.log",
     ) -> None:
         """
         Wrapper de alto nivel: extrae y guarda features emocionales en un PKL.
@@ -266,6 +349,8 @@ class EmotionExtractor:
             ids=ids,
             batch_size=batch_size,
             metadata=metadata,
+            log_dir=log_dir,
+            log_name=log_name,
         )
 
     # -------------------------
@@ -273,18 +358,13 @@ class EmotionExtractor:
     # -------------------------
 
     def _set_labels_if_needed(self, emo_labels: List[str], sent_labels: List[str]) -> None:
-        # Guarda labels solo si no están definidas.
-        # Si ya estaban, no las sobrescribimos para evitar cambiar el orden/dim.
         changed = False
-
         if self._emo_labels is None:
             self._emo_labels = list(emo_labels)
             changed = True
         if self._sent_labels is None:
             self._sent_labels = list(sent_labels)
             changed = True
-
-        # Si cambian labels, invalidamos cache de nombres
         if changed:
             self._feature_names = None
 
@@ -310,12 +390,10 @@ class EmotionExtractor:
 
     @staticmethod
     def _sorted_proba_keys(probas: Dict[str, float]) -> List[str]:
-        # Orden estable para reproducibilidad
         return sorted(probas.keys())
 
     @staticmethod
     def _probas_to_vec(probas: Dict[str, float], labels: List[str]) -> np.ndarray:
-        # Si falta alguna key (raro), la ponemos en 0.
         return np.array([float(probas.get(k, 0.0)) for k in labels], dtype=np.float32)
 
     def _predict_many(self, analyzer, texts: List[str], batch_size: int = 32):
@@ -323,8 +401,6 @@ class EmotionExtractor:
         Intenta hacer predicción en batch si el analyzer lo soporta.
         Si no, cae a loop.
         """
-        # Algunas versiones exponen .predict(text) únicamente.
-        # Si existe un método vectorizado (ej. predict en lista), lo intentamos.
         if hasattr(analyzer, "predict"):
             try:
                 out = analyzer.predict(texts)  # type: ignore[misc]
@@ -341,7 +417,6 @@ class EmotionExtractor:
         return preds
 
     def _signals(self, text: str) -> np.ndarray:
-        # tokens "rápidos" (sin spacy)
         tokens = re.findall(r"\w+", (text or "").lower())
         num_tokens = max(len(tokens), 1)
         num_chars = max(len(text), 1)
@@ -366,7 +441,6 @@ class EmotionExtractor:
         if not self.config.extra_signals:
             return base
 
-        # Señales extra (útiles para “carga emocional” / estilo sensacionalista)
         punct_ratio = self._punct_ratio(text or "")
         digit_ratio = self._digit_ratio(text or "")
 
@@ -423,7 +497,6 @@ class EmotionExtractor:
     @staticmethod
     def _emoji_ratio(text: str) -> float:
         emojis = [c for c in text if c in emoji.EMOJI_DATA]
-        # normalizamos por número de tokens (más estable que chars con URLs)
         return float(len(emojis)) / max(len(text.split()), 1)
 
     def _intensifier_ratio(self, tokens_lower: List[str]) -> float:
