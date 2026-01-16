@@ -15,6 +15,7 @@ from src.data.convert_xlsx_to_pkl import convert_folder_xlsx_to_pkl
 from src.experiments.run_experiment import run_train, run_test, run_train_test
 from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
+from src.features.emotion_extractor import EmotionExtractor, EmotionExtractorConfig
 
 
 # =====================================================
@@ -110,6 +111,34 @@ parser.add_argument(
     help="Device for semantic extractor: cpu | cuda",
 )
 
+parser.add_argument(
+    "--extract_emotion",
+    type=int,
+    default=0,
+    help="Extract emotion features using pysentimiento (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--emotion_use_preprocess_tweet",
+    type=int,
+    default=0,
+    help="Apply pysentimiento preprocess_tweet (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--emotion_input_dir",
+    type=str,
+    default=None,
+    help="Input dir with train/val/test PKLs (defaults to data/processed_by_model/FakeNewsCorpusSpanish if exists else processed_to_PKL)",
+)
+
+parser.add_argument(
+    "--emotion_text_column",
+    type=str,
+    default="text",
+    help="Column name containing the text field in the PKLs",
+)
+
 args = parser.parse_args()
 
 
@@ -179,6 +208,124 @@ if args.extract_semantic == 1:
     )
 
     print("Semantic feature extraction completed")
+
+# =====================================================
+# Emotion feature extraction (OUTSIDE main)
+# =====================================================
+if args.extract_emotion == 1:
+    print("Extracting emotion features (pysentimiento)")
+
+    import pickle
+
+    # Input: prefer processed_by_model (si existe), si no, processed_to_PKL
+    emotion_input_dir = (
+        Path(args.emotion_input_dir)
+        if args.emotion_input_dir
+        else (
+            (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish")
+            if (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish").exists()
+            else PROCESSED_DIR
+        )
+    )
+
+    # Output
+    emotion_output_dir = BASE_DIR / "data" / "features" / "emotion" / "FakeNewsCorpusSpanish"
+    emotion_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Config extractor
+    extractor = EmotionExtractor(
+        EmotionExtractorConfig(
+            lang="es",
+            use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
+            # normalize_signals_by="chars",  # opcional
+            # extra_signals=True,            # opcional
+        )
+    )
+
+    # Tus splits actuales en el repo
+    splits = {
+        "train": "train.pkl",
+        "development": "development.pkl",
+        "test": "test.pkl",
+    }
+
+    def _load_pkl_any(path: Path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    def _extract_texts_and_ids(obj, text_col: str):
+        """
+        Soporta:
+        - list[dict]
+        - dict con key 'data' -> list[dict]
+        - pandas.DataFrame (si en algún momento guardaste DF)
+        """
+        # pandas DataFrame
+        if hasattr(obj, "columns") and hasattr(obj, "__getitem__"):
+            cols = list(obj.columns)
+            if text_col not in cols:
+                raise ValueError(f"Column '{text_col}' not found. Available columns: {cols}")
+            texts = obj[text_col].astype(str).tolist()
+
+            # ids: preferir 'id' si existe
+            ids = None
+            if "id" in cols:
+                ids = obj["id"].tolist()
+            return texts, ids
+
+        # dict wrapper
+        if isinstance(obj, dict) and "data" in obj and isinstance(obj["data"], list):
+            obj = obj["data"]
+
+        # list[dict]
+        if isinstance(obj, list):
+            if not obj:
+                return [], None
+            if not isinstance(obj[0], dict):
+                raise ValueError("PKL list must contain dict rows.")
+            if text_col not in obj[0]:
+                raise ValueError(
+                    f"Key '{text_col}' not found in PKL rows. "
+                    f"Available keys: {list(obj[0].keys())}"
+                )
+            texts = [str(r.get(text_col, "")) for r in obj]
+
+            # ids: usa 'id' si existe, si no, None (pero filas siguen alineadas por índice)
+            ids = [r.get("id") for r in obj] if "id" in obj[0] else None
+            return texts, ids
+
+        raise ValueError(f"Unsupported PKL content type: {type(obj)}")
+
+    for split_name, filename in splits.items():
+        in_path = emotion_input_dir / filename
+        if not in_path.exists():
+            print(f"Skipped (missing): {in_path}")
+            continue
+
+        obj = _load_pkl_any(in_path)
+        texts, ids = _extract_texts_and_ids(obj, args.emotion_text_column)
+
+        out_path = emotion_output_dir / f"{split_name}_emotion.pkl"
+
+        # Guarda un PKL estándar: {"ids", "X", "feature_names", ...}
+        extractor.extract_and_save_pkl(
+            texts=texts,
+            ids=ids,
+            output_path=out_path,
+            batch_size=32,
+            metadata={
+                "dataset": "FakeNewsCorpusSpanish",
+                "split": split_name,
+                "source_pkl": str(in_path),
+                "text_column": args.emotion_text_column,
+            },
+        )
+
+        print(f"Saved emotion features: {out_path.name} | samples={len(texts)}")
+
+    print("Emotion feature extraction completed")
+else:
+    print("Emotion feature extraction skipped")
 
 
 # =====================================================

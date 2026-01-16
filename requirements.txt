@@ -13,3 +13,6 @@ tokenizers>=0.19.1
 # PyTorch
 torch>=2.2.2
 torch --index-url https://download.pytorch.org/whl/cu121
+
+# Features extraction
+pysentimiento
