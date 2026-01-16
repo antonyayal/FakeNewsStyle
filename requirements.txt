@@ -14,5 +14,16 @@ tokenizers>=0.19.1
 torch>=2.2.2
 torch --index-url https://download.pytorch.org/whl/cu121
 
-# Features extraction
-pysentimiento
+# Emotion extractor
+pysentimiento>=0.7.3
+emoji>=2.10.0
+transformers>=4.36
+
+# Style extractor
+spacy>=3.7.0
+textstat>=0.7.3
+wordfreq>=3.0.3
+
+# Utils
+scipy>=1.10
+tqdm>=4.65

@@ -4,6 +4,7 @@
 import argparse
 import sys
 from pathlib import Path
+import pickle
 
 # =====================================================
 # Project setup
@@ -16,6 +17,7 @@ from src.experiments.run_experiment import run_train, run_test, run_train_test
 from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import EmotionExtractor, EmotionExtractorConfig
+from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
 
 
 # =====================================================
@@ -137,6 +139,83 @@ parser.add_argument(
     type=str,
     default="text",
     help="Column name containing the text field in the PKLs",
+)
+
+parser.add_argument(
+    "--extract_style",
+    type=int,
+    default=0,
+    help="Extract style features using spaCy/textstat/wordfreq (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--style_input_dir",
+    type=str,
+    default=None,
+    help="Input dir with train/dev/test PKLs (defaults to processed_by_model if exists else processed_to_PKL)",
+)
+
+parser.add_argument(
+    "--style_text_column",
+    type=str,
+    default="text",
+    help="Column name containing the text field in the PKLs",
+)
+
+parser.add_argument(
+    "--style_spacy_model",
+    type=str,
+    default="es_core_news_sm",
+    help="spaCy model name for Spanish",
+)
+
+parser.add_argument(
+    "--style_batch_size",
+    type=int,
+    default=64,
+    help="Batch size for style extractor spaCy pipe",
+)
+
+parser.add_argument(
+    "--style_no_readability",
+    type=int,
+    default=0,
+    help="Disable readability features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_formality",
+    type=int,
+    default=0,
+    help="Disable formality features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_oov",
+    type=int,
+    default=0,
+    help="Disable OOV/spelling proxy features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_diversity",
+    type=int,
+    default=0,
+    help="Disable diversity features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_extra_signals",
+    type=int,
+    default=0,
+    help="Disable extra stylometric signals (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_oov_zipf_threshold",
+    type=float,
+    default=1.5,
+    help="Zipf threshold (wordfreq) below which a word is considered rare/OOV-ish",
 )
 
 args = parser.parse_args()
@@ -326,6 +405,210 @@ if args.extract_emotion == 1:
     print("Emotion feature extraction completed")
 else:
     print("Emotion feature extraction skipped")
+
+# =====================================================
+# Imports (agrega esto junto a los otros imports)
+# =====================================================
+import pickle
+
+from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
+
+
+# =====================================================
+# Argument parser (agrega estos argumentos)
+# =====================================================
+parser.add_argument(
+    "--extract_style",
+    type=int,
+    default=0,
+    help="Extract style features using spaCy/textstat/wordfreq (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--style_input_dir",
+    type=str,
+    default=None,
+    help="Input dir with train/dev/test PKLs (defaults to processed_by_model if exists else processed_to_PKL)",
+)
+
+parser.add_argument(
+    "--style_text_column",
+    type=str,
+    default="text",
+    help="Column name containing the text field in the PKLs",
+)
+
+parser.add_argument(
+    "--style_spacy_model",
+    type=str,
+    default="es_core_news_sm",
+    help="spaCy model name for Spanish",
+)
+
+parser.add_argument(
+    "--style_batch_size",
+    type=int,
+    default=64,
+    help="Batch size for style extractor spaCy pipe",
+)
+
+parser.add_argument(
+    "--style_no_readability",
+    type=int,
+    default=0,
+    help="Disable readability features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_formality",
+    type=int,
+    default=0,
+    help="Disable formality features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_oov",
+    type=int,
+    default=0,
+    help="Disable OOV/spelling proxy features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_diversity",
+    type=int,
+    default=0,
+    help="Disable diversity features (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_no_extra_signals",
+    type=int,
+    default=0,
+    help="Disable extra stylometric signals (0 = keep, 1 = disable)",
+)
+
+parser.add_argument(
+    "--style_oov_zipf_threshold",
+    type=float,
+    default=1.5,
+    help="Zipf threshold (wordfreq) below which a word is considered rare/OOV-ish",
+)
+
+
+# =====================================================
+# Style feature extraction (OUTSIDE main) - agrega este bloque completo
+# =====================================================
+if args.extract_style == 1:
+    print("Extracting style features (spaCy/textstat/wordfreq)")
+
+    # Input: prefer processed_by_model (si existe), si no, processed_to_PKL
+    style_input_dir = (
+        Path(args.style_input_dir)
+        if args.style_input_dir
+        else (
+            (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish")
+            if (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish").exists()
+            else PROCESSED_DIR
+        )
+    )
+
+    # Output
+    style_output_dir = BASE_DIR / "data" / "features" / "style" / "FakeNewsCorpusSpanish"
+    style_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extractor config
+    style_extractor = StyleExtractor(
+        StyleExtractorConfig(
+            spacy_model=args.style_spacy_model,
+            compute_readability=(args.style_no_readability == 0),
+            compute_formality=(args.style_no_formality == 0),
+            compute_oov=(args.style_no_oov == 0),
+            compute_diversity=(args.style_no_diversity == 0),
+            extra_signals=(args.style_no_extra_signals == 0),
+            oov_zipf_threshold=float(args.style_oov_zipf_threshold),
+        )
+    )
+
+    splits = {
+        "train": "train.pkl",
+        "development": "development.pkl",
+        "test": "test.pkl",
+    }
+
+    def _load_pkl_any(path: Path):
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    def _extract_texts_and_ids(obj, text_col: str):
+        """
+        Soporta:
+        - list[dict]
+        - dict con key 'data' -> list[dict]
+        - pandas.DataFrame (si en algún momento guardaste DF)
+        """
+        # pandas DataFrame
+        if hasattr(obj, "columns") and hasattr(obj, "__getitem__"):
+            cols = list(obj.columns)
+            if text_col not in cols:
+                raise ValueError(f"Column '{text_col}' not found. Available columns: {cols}")
+            texts = obj[text_col].astype(str).tolist()
+
+            ids = None
+            if "id" in cols:
+                ids = obj["id"].tolist()
+            return texts, ids
+
+        # dict wrapper
+        if isinstance(obj, dict) and "data" in obj and isinstance(obj["data"], list):
+            obj = obj["data"]
+
+        # list[dict]
+        if isinstance(obj, list):
+            if not obj:
+                return [], None
+            if not isinstance(obj[0], dict):
+                raise ValueError("PKL list must contain dict rows.")
+            if text_col not in obj[0]:
+                raise ValueError(
+                    f"Key '{text_col}' not found in PKL rows. "
+                    f"Available keys: {list(obj[0].keys())}"
+                )
+
+            texts = [str(r.get(text_col, "")) for r in obj]
+            ids = [r.get("id") for r in obj] if "id" in obj[0] else None
+            return texts, ids
+
+        raise ValueError(f"Unsupported PKL content type: {type(obj)}")
+
+    for split_name, filename in splits.items():
+        in_path = style_input_dir / filename
+        if not in_path.exists():
+            print(f"Skipped (missing): {in_path}")
+            continue
+
+        obj = _load_pkl_any(in_path)
+        texts, ids = _extract_texts_and_ids(obj, args.style_text_column)
+
+        out_path = style_output_dir / f"{split_name}_style.pkl"
+
+        style_extractor.save_features_pkl(
+            texts=texts,
+            ids=ids,
+            output_path=out_path,
+            batch_size=int(args.style_batch_size),
+            metadata={
+                "dataset": "FakeNewsCorpusSpanish",
+                "split": split_name,
+                "source_pkl": str(in_path),
+                "text_column": args.style_text_column,
+            },
+        )
+
+        print(f"Saved style features: {out_path.name} | samples={len(texts)}")
+
+    print("Style feature extraction completed")
+else:
+    print("Style feature extraction skipped")
 
 
 # =====================================================
