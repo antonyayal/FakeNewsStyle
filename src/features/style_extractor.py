@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-
 from __future__ import annotations
 
 import re
 import math
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -169,7 +169,9 @@ class StyleExtractor:
 
         # feature_names estables por orden de dict
         names = self.feature_names()
-        X = np.vstack([np.array([d.get(k, 0.0) for k in names], dtype=np.float32) for d in feat_dicts]).astype(np.float32)
+        X = np.vstack(
+            [np.array([d.get(k, 0.0) for k in names], dtype=np.float32) for d in feat_dicts]
+        ).astype(np.float32)
         return self._safe(X)
 
     def extract_with_names(self, text: str) -> Tuple[np.ndarray, List[str]]:
@@ -209,7 +211,36 @@ class StyleExtractor:
         }
 
     # -------------------------
-    # Persistence (PKL)
+    # Logging helpers (paradigma: escribir en logs/ como preprocess)
+    # -------------------------
+
+    @staticmethod
+    def _ensure_dir(p):
+        from pathlib import Path
+
+        pp = Path(p)
+        pp.mkdir(parents=True, exist_ok=True)
+        return pp
+
+    @staticmethod
+    def _append_log_line(log_file, msg: str) -> None:
+        from datetime import datetime
+        from pathlib import Path
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+
+    @staticmethod
+    def _format_kv(d: Dict[str, Any]) -> str:
+        parts = []
+        for k, v in d.items():
+            parts.append(f"{k}={v}")
+        return " | ".join(parts)
+
+    # -------------------------
+    # Persistence (PKL) + LOG
     # -------------------------
 
     def save_features_pkl(
@@ -219,6 +250,9 @@ class StyleExtractor:
         ids: Optional[List[Any]] = None,
         batch_size: int = 64,
         metadata: Optional[Dict[str, Any]] = None,
+        # ✅ NUEVO: log (misma idea que preprocess: se pasa log_dir)
+        log_dir=None,
+        log_name: str = "style_extractor.log",
     ) -> None:
         """
         Guarda:
@@ -230,29 +264,92 @@ class StyleExtractor:
           "feature_dim": D,
           "meta": {...}
         }
+
+        Logging:
+        - Si log_dir se especifica, se escribe un .log con:
+          start/end, input/output, #samples, dim, batch_size, flags de config, errores.
         """
         import pickle
         from pathlib import Path
 
-        if ids is not None and len(ids) != len(texts):
-            raise ValueError(f"ids length ({len(ids)}) must match texts length ({len(texts)}).")
+        t0 = time.time()
 
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
 
-        X = self.extract_batch(texts, batch_size=batch_size)
-        payload: Dict[str, Any] = {
-            "X": X,
-            "feature_names": self.feature_names(),
-            "num_samples": int(X.shape[0]),
-            "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
-            "meta": {**self.meta(), **(metadata or {})},
-        }
-        if ids is not None:
-            payload["ids"] = list(ids)
+        log_file = None
+        if log_dir is not None:
+            log_root = self._ensure_dir(log_dir)
+            log_file = str(Path(log_root) / log_name)
+            self._append_log_line(log_file, "StyleExtractor: START save_features_pkl")
+            self._append_log_line(
+                log_file,
+                self._format_kv(
+                    {
+                        "output_path": str(out),
+                        "num_texts": len(texts),
+                        "has_ids": ids is not None,
+                        "batch_size": batch_size,
+                        "spacy_available": (self._nlp is not None),
+                        "spacy_model": self.config.spacy_model,
+                        "compute_readability": self.config.compute_readability,
+                        "compute_formality": self.config.compute_formality,
+                        "compute_oov": self.config.compute_oov,
+                        "compute_diversity": self.config.compute_diversity,
+                        "extra_signals": self.config.extra_signals,
+                        "oov_zipf_threshold": self.config.oov_zipf_threshold,
+                    }
+                ),
+            )
+            if metadata:
+                self._append_log_line(log_file, f"metadata_keys={list(metadata.keys())}")
 
-        with open(out, "wb") as f:
-            pickle.dump(payload, f)
+        # Validaciones
+        if ids is not None and len(ids) != len(texts):
+            msg = f"ids length ({len(ids)}) must match texts length ({len(texts)})."
+            if log_file:
+                self._append_log_line(log_file, f"ERROR: {msg}")
+                self._append_log_line(log_file, "StyleExtractor: ABORT")
+            raise ValueError(msg)
+
+        try:
+            X = self.extract_batch(texts, batch_size=batch_size)
+
+            payload: Dict[str, Any] = {
+                "X": X,
+                "feature_names": self.feature_names(),
+                "num_samples": int(X.shape[0]) if X.ndim == 2 else int(len(texts)),
+                "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
+                "meta": {**self.meta(), **(metadata or {})},
+            }
+            if ids is not None:
+                payload["ids"] = list(ids)
+
+            with open(out, "wb") as f:
+                pickle.dump(payload, f)
+
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(
+                    log_file,
+                    self._format_kv(
+                        {
+                            "saved": out.name,
+                            "num_samples": payload["num_samples"],
+                            "feature_dim": payload["feature_dim"],
+                            "elapsed_sec": f"{dt:.3f}",
+                        }
+                    ),
+                )
+                self._append_log_line(log_file, "StyleExtractor: END save_features_pkl")
+
+        except Exception as e:
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(log_file, f"ERROR: {type(e).__name__}: {e}")
+                self._append_log_line(log_file, f"elapsed_sec={dt:.3f}")
+                self._append_log_line(log_file, "StyleExtractor: END (FAILED)")
+            raise
 
     # -------------------------
     # Core extraction
@@ -384,7 +481,6 @@ class StyleExtractor:
         # ------------
         extra = self._extra_style_signals(text_raw, tokens, words_lower, num_sents) if self.config.extra_signals else {}
 
-        # feature set base (incluye todo lo que pediste + extras)
         feats: Dict[str, float] = {
             # Legibilidad
             "ifsz": float(ifsz),
@@ -539,23 +635,19 @@ class StyleExtractor:
         # Modalidad / hedging (señales de falta de certeza)
         hedge_words = {"podría", "podrian", "posible", "posiblemente", "al parecer", "según", "presuntamente", "dicen"}
         hedge_count = 0
-        # match simple: token exacto
         for w in words_lower:
             if w in hedge_words:
                 hedge_count += 1
         hedge_ratio = float(hedge_count) / num_words
 
         # Named-entity proxy (sin NER): proporción de tokens Capitalizados “internos”
-        # (si hay tokens spaCy, lo hacemos mejor)
         proper_like_ratio = 0.0
         if tokens is not None:
-            # excluimos inicio de oración: proxy simple (requiere doc.sents)
-            # aquí medimos PROPN ratio indirectamente con pos_ ya está, pero añadimos por robustez:
             propn = sum(1 for t in tokens if getattr(t, "pos_", "") == "PROPN")
             total = len(tokens) or 1
             proper_like_ratio = float(propn) / total
 
-        # Burstiness: varianza de longitud de oración (fake puede ser más “explosivo”)
+        # Burstiness: varianza de longitud de oración
         sent_lens = self._sentence_lengths_simple(text)
         burstiness = float(np.std(sent_lens)) if sent_lens else 0.0
 
@@ -596,10 +688,8 @@ class StyleExtractor:
 
     @staticmethod
     def _split_sentences_simple(text: str) -> List[str]:
-        # split rudo por puntuación terminal
         sents = re.split(r"[.!?]+", text)
-        sents = [s.strip() for s in sents if s.strip()]
-        return sents
+        return [s.strip() for s in sents if s.strip()]
 
     @staticmethod
     def _sentence_lengths_simple(text: str) -> List[int]:
@@ -634,7 +724,6 @@ class StyleExtractor:
                     continue
                 d = 0
                 cur = token
-                # subir al root
                 while cur.head is not cur and d < 200:
                     d += 1
                     cur = cur.head
@@ -645,7 +734,6 @@ class StyleExtractor:
 
     @staticmethod
     def _herdans_c(V: int, N: int) -> float:
-        # C = log(V) / log(N)
         N = max(N, 1)
         V = max(V, 1)
         try:
@@ -655,17 +743,12 @@ class StyleExtractor:
 
     @staticmethod
     def _root_ttr(V: int, N: int) -> float:
-        # RTTR = V / sqrt(N)
         N = max(N, 1)
         V = max(V, 0)
         return float(V) / float(math.sqrt(N))
 
     @staticmethod
     def _repeated_char_ratio(text: str) -> float:
-        """
-        Ratio de patrones tipo "holaaaa", "increíííble", "!!!!"
-        Medimos repeticiones de 3+ del mismo char.
-        """
         if not text:
             return 0.0
         repeats = len(re.findall(r"(.)\1\1+", text))

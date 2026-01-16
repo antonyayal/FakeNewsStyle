@@ -7,6 +7,7 @@ import hashlib
 import math
 import pickle
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +86,27 @@ class ContextExtractor:
     def __init__(self, config: ContextExtractorConfig = ContextExtractorConfig()):
         self.config = config
         self._feature_names: Optional[List[str]] = None
+
+    # -------------------------
+    # Logging helpers (mismo paradigma que preprocess: logs/...)
+    # -------------------------
+
+    @staticmethod
+    def _ensure_dir(p):
+        pp = Path(p)
+        pp.mkdir(parents=True, exist_ok=True)
+        return pp
+
+    @staticmethod
+    def _append_log_line(log_file: Path, msg: str) -> None:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {msg}\n")
+
+    @staticmethod
+    def _format_kv(d: Dict[str, Any]) -> str:
+        return " | ".join([f"{k}={v}" for k, v in d.items()])
 
     # -------------------------
     # Public API
@@ -188,7 +210,7 @@ class ContextExtractor:
         }
 
     # -------------------------
-    # Persistence (PKL)
+    # Persistence (PKL) + LOG
     # -------------------------
 
     def save_features_pkl(
@@ -197,6 +219,9 @@ class ContextExtractor:
         output_path: str | Path,
         ids: Optional[List[Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        # ✅ NUEVO: logs (paradigma preprocess)
+        log_dir: Optional[str | Path] = None,
+        log_name: str = "context_extractor.log",
     ) -> None:
         """
         Guarda:
@@ -208,26 +233,90 @@ class ContextExtractor:
           "feature_dim": D,
           "meta": {...}
         }
+
+        Logging:
+        - Si log_dir se especifica, escribe un .log con:
+          start/end, output_path, #rows, dims, config y errores.
         """
+        t0 = time.time()
+
         if ids is not None and len(ids) != len(rows):
-            raise ValueError(f"ids length ({len(ids)}) must match rows length ({len(rows)}).")
+            msg = f"ids length ({len(ids)}) must match rows length ({len(rows)})."
+            # log si aplica
+            if log_dir is not None:
+                log_file = Path(self._ensure_dir(log_dir)) / log_name
+                self._append_log_line(log_file, f"ERROR: {msg}")
+            raise ValueError(msg)
 
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
 
-        X = self.extract_batch_from_rows(rows)
-        payload: Dict[str, Any] = {
-            "X": X,
-            "feature_names": self.feature_names(),
-            "num_samples": int(X.shape[0]),
-            "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
-            "meta": {**self.meta(), **(metadata or {})},
-        }
-        if ids is not None:
-            payload["ids"] = list(ids)
+        log_file: Optional[Path] = None
+        if log_dir is not None:
+            log_file = Path(self._ensure_dir(log_dir)) / log_name
+            self._append_log_line(log_file, "ContextExtractor: START save_features_pkl")
+            self._append_log_line(
+                log_file,
+                self._format_kv(
+                    {
+                        "output_path": str(out),
+                        "num_rows": len(rows),
+                        "has_ids": ids is not None,
+                        "topic_column": self.config.topic_column,
+                        "source_column": self.config.source_column,
+                        "link_column": self.config.link_column,
+                        "author_column": self.config.author_column,
+                        "date_column": self.config.date_column,
+                        "dims": f"src={self.config.source_dim},dom={self.config.domain_dim},top={self.config.topic_dim},aut={self.config.author_dim}",
+                        "n_hashes": self.config.n_hashes,
+                        "signed": self.config.signed,
+                        "l2_normalize": self.config.l2_normalize,
+                        "missing_age_value": self.config.missing_age_value,
+                        "age_cap_days": self.config.age_cap_days,
+                    }
+                ),
+            )
+            if metadata:
+                self._append_log_line(log_file, f"metadata_keys={list(metadata.keys())}")
 
-        with open(out, "wb") as f:
-            pickle.dump(payload, f)
+        try:
+            X = self.extract_batch_from_rows(rows)
+
+            payload: Dict[str, Any] = {
+                "X": X,
+                "feature_names": self.feature_names(),
+                "num_samples": int(X.shape[0]),
+                "feature_dim": int(X.shape[1]) if X.ndim == 2 else int(X.shape[0]),
+                "meta": {**self.meta(), **(metadata or {})},
+            }
+            if ids is not None:
+                payload["ids"] = list(ids)
+
+            with open(out, "wb") as f:
+                pickle.dump(payload, f)
+
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(
+                    log_file,
+                    self._format_kv(
+                        {
+                            "saved": out.name,
+                            "num_samples": payload["num_samples"],
+                            "feature_dim": payload["feature_dim"],
+                            "elapsed_sec": f"{dt:.3f}",
+                        }
+                    ),
+                )
+                self._append_log_line(log_file, "ContextExtractor: END save_features_pkl")
+
+        except Exception as e:
+            if log_file:
+                dt = time.time() - t0
+                self._append_log_line(log_file, f"ERROR: {type(e).__name__}: {e}")
+                self._append_log_line(log_file, f"elapsed_sec={dt:.3f}")
+                self._append_log_line(log_file, "ContextExtractor: END (FAILED)")
+            raise
 
     def extract_and_save_from_dataframe(
         self,
@@ -235,6 +324,9 @@ class ContextExtractor:
         output_path: str | Path,
         ids_column: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        # ✅ NUEVO: logs
+        log_dir: Optional[str | Path] = None,
+        log_name: str = "context_extractor.log",
     ) -> None:
         """
         Convenience: recibe un pandas.DataFrame, extrae rows e ids (por Id),
@@ -247,7 +339,14 @@ class ContextExtractor:
         if id_col and hasattr(df, "columns") and id_col in list(df.columns):
             ids = df[id_col].tolist()
 
-        self.save_features_pkl(rows=rows, ids=ids, output_path=output_path, metadata=metadata)
+        self.save_features_pkl(
+            rows=rows,
+            ids=ids,
+            output_path=output_path,
+            metadata=metadata,
+            log_dir=log_dir,
+            log_name=log_name,
+        )
 
     # -------------------------
     # Internals
@@ -269,7 +368,6 @@ class ContextExtractor:
             parsed = urlparse(u)
             netloc = parsed.netloc or ""
             if not netloc and parsed.path and ("." in parsed.path.split("/")[0]):
-                # URLs sin esquema: example.com/path
                 netloc = parsed.path.split("/")[0]
             netloc = netloc.lower().strip()
             netloc = re.sub(r"^www\.", "", netloc)
@@ -278,13 +376,11 @@ class ContextExtractor:
             return ""
 
     def _get_author(self, row: Dict[str, Any], link: str) -> str:
-        # 1) Prefer explicit column if provided
         if self.config.author_column:
             a = self._get_str(row, self.config.author_column)
             if a:
                 return a
 
-        # 2) Heuristic from URL: /author/<name>/, /autor/<name>/, ?author=...
         if not link:
             return ""
         try:
@@ -342,7 +438,6 @@ class ContextExtractor:
     def _parse_datetime(s: str) -> Optional[datetime]:
         t = s.strip()
 
-        # numeric timestamp seconds/ms
         if re.fullmatch(r"\d{10,13}", t):
             try:
                 v = int(t)
@@ -352,7 +447,6 @@ class ContextExtractor:
             except Exception:
                 return None
 
-        # ISO
         try:
             if t.endswith("Z"):
                 t2 = t[:-1] + "+00:00"
@@ -361,7 +455,6 @@ class ContextExtractor:
         except Exception:
             pass
 
-        # common formats
         for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d", "%Y-%m-%d"):
             try:
                 dt = datetime.strptime(t, fmt)

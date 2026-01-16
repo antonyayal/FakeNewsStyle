@@ -85,6 +85,11 @@ def _default_input_dir(user_dir: str | None, fallback_a: Path, fallback_b: Path)
     return fallback_a if fallback_a.exists() else fallback_b
 
 
+def _ensure_dir(p: Path) -> Path:
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 # =====================================================
 # Argument parser (GLOBAL)  -> SOLO se define una vez
 # =====================================================
@@ -103,6 +108,7 @@ parser.add_argument("--out_dir", type=str, default="./runs", help="Directory to 
 parser.add_argument("--preprocess_text", type=int, default=0, help="Preprocess text for XLM-RoBERTa (0 = No, 1 = Yes)")
 parser.add_argument("--preprocess_input_dir", type=str, default=None, help="Input dir with train/val/test PKLs (defaults to processed_to_PKL/FakeNewsCorpusSpanish)")
 parser.add_argument("--preprocess_output_dir", type=str, default=None, help="Output dir for preprocessed PKLs (defaults to processed_by_model/FakeNewsCorpusSpanish)")
+# Base log folder (solo para preprocess como ya lo tenías)
 parser.add_argument("--log_dir", type=str, default="logs/preprocess", help="Directory to store preprocessing logs")
 
 # ---- semantic
@@ -158,6 +164,13 @@ RAW_DIR = BASE_DIR / "data" / "raw" / "FakeNewsCorpusSpanish"
 PROCESSED_DIR = BASE_DIR / "data" / "processed_to_PKL" / "FakeNewsCorpusSpanish"
 PROCESSED_BY_MODEL_DIR = BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish"
 
+# Logs (paradigma: como preprocess, pero por módulo)
+LOGS_FEATURES_DIR = BASE_DIR / "logs" / "features"
+LOGS_SEMANTIC_DIR = _ensure_dir(LOGS_FEATURES_DIR / "semantic")
+LOGS_EMOTION_DIR = _ensure_dir(LOGS_FEATURES_DIR / "emotion")
+LOGS_STYLE_DIR = _ensure_dir(LOGS_FEATURES_DIR / "style")
+LOGS_CONTEXT_DIR = _ensure_dir(LOGS_FEATURES_DIR / "context")
+
 
 # =====================================================
 # Step 1: Prepare corpus
@@ -196,16 +209,19 @@ if args.extract_semantic == 1:
     input_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
     output_dir = BASE_DIR / "data" / "features" / "semantic" / "FakeNewsCorpusSpanish"
 
+    # ✅ MISMO PARADIGMA: pasamos un log_dir real (absoluto) a la función
     extract_semantic_features_for_splits(
         input_dir=input_dir,
         output_dir=output_dir,
-        log_dir=Path(args.log_dir) / "semantic",
+        log_dir=LOGS_SEMANTIC_DIR,
         pooling=args.semantic_pooling,
         device=args.semantic_device,
         batch_size=8,
         max_len=256,
     )
     print("Semantic feature extraction completed")
+else:
+    print("Semantic feature extraction skipped")
 
 
 # =====================================================
@@ -238,6 +254,8 @@ if args.extract_emotion == 1:
 
         out_path = emotion_output_dir / f"{split_name}_emotion.pkl"
 
+        # ✅ MISMO PARADIGMA: el módulo debe recibir log_dir y escribir su log
+        # Requiere que tu EmotionExtractor soporte estos args.
         extractor.extract_and_save_pkl(
             texts=texts,
             ids=ids,
@@ -250,6 +268,8 @@ if args.extract_emotion == 1:
                 "text_column": args.emotion_text_column,
                 "id_column": args.emotion_id_column,
             },
+            log_dir=LOGS_EMOTION_DIR,
+            log_name=f"emotion_{split_name}.log",
         )
 
         print(f"Saved emotion features: {out_path.name} | samples={len(texts)}")
@@ -294,6 +314,8 @@ if args.extract_style == 1:
 
         out_path = style_output_dir / f"{split_name}_style.pkl"
 
+        # ✅ MISMO PARADIGMA: pasar log_dir para que el módulo escriba logs
+        # Requiere que tu StyleExtractor soporte estos args.
         style_extractor.save_features_pkl(
             texts=texts,
             ids=ids,
@@ -306,6 +328,8 @@ if args.extract_style == 1:
                 "text_column": args.style_text_column,
                 "id_column": args.style_id_column,
             },
+            log_dir=LOGS_STYLE_DIR,
+            log_name=f"style_{split_name}.log",
         )
 
         print(f"Saved style features: {out_path.name} | samples={len(texts)}")
@@ -367,6 +391,8 @@ if args.extract_context == 1:
 
         out_path = context_output_dir / f"{split_name}_context.pkl"
 
+        # ✅ MISMO PARADIGMA: pasar log_dir para que el módulo escriba logs
+        # Requiere que tu ContextExtractor soporte estos args.
         ctx_extractor.save_features_pkl(
             rows=rows,
             ids=ids,
@@ -382,6 +408,8 @@ if args.extract_context == 1:
                 "author_column": args.context_author_column,
                 "date_column": args.context_date_column,
             },
+            log_dir=LOGS_CONTEXT_DIR,
+            log_name=f"context_{split_name}.log",
         )
 
         print(f"Saved context features: {out_path.name} | samples={len(rows)}")
