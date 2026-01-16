@@ -18,6 +18,7 @@ from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import EmotionExtractor, EmotionExtractorConfig
 from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
+from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
 
 
 # =====================================================
@@ -217,6 +218,105 @@ parser.add_argument(
     default=1.5,
     help="Zipf threshold (wordfreq) below which a word is considered rare/OOV-ish",
 )
+
+parser.add_argument(
+    "--extract_context",
+    type=int,
+    default=0,
+    help="Extract context features (Source/Domain/Topic/Age) (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--context_input_dir",
+    type=str,
+    default=None,
+    help="Input dir with train/dev/test PKLs (defaults to processed_by_model if exists else processed_to_PKL)",
+)
+
+parser.add_argument(
+    "--context_topic_column",
+    type=str,
+    default="Topic",
+    help="Column name for topic/category in input PKLs",
+)
+
+parser.add_argument(
+    "--context_source_column",
+    type=str,
+    default="Source",
+    help="Column name for source/media in input PKLs",
+)
+
+parser.add_argument(
+    "--context_link_column",
+    type=str,
+    default="Link",
+    help="Column name for URL link in input PKLs",
+)
+
+parser.add_argument(
+    "--context_id_column",
+    type=str,
+    default="Id",
+    help="Column name for row ID to preserve alignment across feature PKLs",
+)
+
+parser.add_argument(
+    "--context_author_column",
+    type=str,
+    default=None,
+    help="Optional column name for author (if exists). If not provided, tries heuristic from URL",
+)
+
+parser.add_argument(
+    "--context_date_column",
+    type=str,
+    default=None,
+    help="Optional column name for publish date to compute age in days",
+)
+
+parser.add_argument(
+    "--context_source_dim",
+    type=int,
+    default=32,
+    help="Hash-embedding dim for Source",
+)
+
+parser.add_argument(
+    "--context_domain_dim",
+    type=int,
+    default=32,
+    help="Hash-embedding dim for Domain extracted from Link",
+)
+
+parser.add_argument(
+    "--context_topic_dim",
+    type=int,
+    default=16,
+    help="Hash-embedding dim for Topic",
+)
+
+parser.add_argument(
+    "--context_author_dim",
+    type=int,
+    default=16,
+    help="Hash-embedding dim for Author (if available)",
+)
+
+parser.add_argument(
+    "--context_n_hashes",
+    type=int,
+    default=2,
+    help="Number of hashes per field for hash embeddings",
+)
+
+parser.add_argument(
+    "--context_unsigned",
+    type=int,
+    default=0,
+    help="Disable signed hashing (0 = signed, 1 = unsigned)",
+)
+
 
 args = parser.parse_args()
 
@@ -496,7 +596,7 @@ parser.add_argument(
 
 
 # =====================================================
-# Style feature extraction (OUTSIDE main) - agrega este bloque completo
+# Style feature extraction (OUTSIDE main)
 # =====================================================
 if args.extract_style == 1:
     print("Extracting style features (spaCy/textstat/wordfreq)")
@@ -610,6 +710,105 @@ if args.extract_style == 1:
 else:
     print("Style feature extraction skipped")
 
+# =====================================================
+# Context feature extraction (OUTSIDE main)
+# =====================================================
+if args.extract_context == 1:
+    print("Extracting context features (Source/Domain/Topic/Age)")
+
+    import pandas as pd
+
+    # Input: prefer processed_by_model (si existe), si no, processed_to_PKL
+    context_input_dir = (
+        Path(args.context_input_dir)
+        if args.context_input_dir
+        else (
+            (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish")
+            if (BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish").exists()
+            else PROCESSED_DIR
+        )
+    )
+
+    # Output
+    context_output_dir = BASE_DIR / "data" / "features" / "context" / "FakeNewsCorpusSpanish"
+    context_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extractor
+    ctx_extractor = ContextExtractor(
+        ContextExtractorConfig(
+            topic_column=args.context_topic_column,     # "Topic"
+            source_column=args.context_source_column,   # "Source"
+            link_column=args.context_link_column,       # "Link"
+            id_column=args.context_id_column,           # "Id"
+            author_column=args.context_author_column,   # None (si no existe)
+            date_column=args.context_date_column,       # None (si no existe)
+            source_dim=int(args.context_source_dim),
+            domain_dim=int(args.context_domain_dim),
+            topic_dim=int(args.context_topic_dim),
+            author_dim=int(args.context_author_dim),
+            n_hashes=int(args.context_n_hashes),
+            signed=(args.context_unsigned == 0),
+        )
+    )
+
+    splits = {
+        "train": "train.pkl",
+        "development": "development.pkl",
+        "test": "test.pkl",
+    }
+
+    def _load_df(path: Path) -> pd.DataFrame:
+        # Tus PKLs son pandas.DataFrame
+        return pd.read_pickle(path)
+
+    for split_name, filename in splits.items():
+        in_path = context_input_dir / filename
+        if not in_path.exists():
+            print(f"Skipped (missing): {in_path}")
+            continue
+
+        df = _load_df(in_path)
+
+        # Validación de columnas esperadas
+        required_cols = [args.context_topic_column, args.context_source_column, args.context_link_column]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Missing required columns in {in_path.name}: {missing}. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+        # ids para preservar alineación al combinar PKLs
+        ids = None
+        if args.context_id_column and args.context_id_column in df.columns:
+            ids = df[args.context_id_column].tolist()
+
+        rows = df.to_dict(orient="records")
+
+        out_path = context_output_dir / f"{split_name}_context.pkl"
+
+        ctx_extractor.save_features_pkl(
+            rows=rows,
+            ids=ids,
+            output_path=out_path,
+            metadata={
+                "dataset": "FakeNewsCorpusSpanish",
+                "split": split_name,
+                "source_pkl": str(in_path),
+                "topic_column": args.context_topic_column,
+                "source_column": args.context_source_column,
+                "link_column": args.context_link_column,
+                "id_column": args.context_id_column,
+                "author_column": args.context_author_column,
+                "date_column": args.context_date_column,
+            },
+        )
+
+        print(f"Saved context features: {out_path.name} | samples={len(rows)}")
+
+    print("Context feature extraction completed")
+else:
+    print("Context feature extraction skipped")
 
 # =====================================================
 # Main
