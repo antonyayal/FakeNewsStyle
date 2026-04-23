@@ -55,7 +55,6 @@ DEFAULT_STYLE_INTENSIFIERS = {
 }
 
 DEFAULT_SPANISH_STOPWORDS = {
-    # lista corta (puedes ampliarla)
     "de", "la", "que", "el", "en", "y", "a", "los", "del", "se",
     "las", "por", "un", "para", "con", "no", "una", "su", "al",
     "lo", "como", "más", "pero", "sus", "le", "ya", "o", "este",
@@ -87,7 +86,6 @@ class StyleExtractorConfig:
 
     # Spelling / OOV approximation
     compute_oov: bool = True
-    # threshold for zipf_frequency(word) below which we consider "rare"/OOV-ish
     oov_zipf_threshold: float = 1.5
 
     # Diversity metrics
@@ -104,6 +102,9 @@ class StyleExtractorConfig:
 
     # Make numeric safe
     safe_numeric: bool = True
+
+    # NUEVO: normalización por tipo
+    normalize_features: bool = True
 
 
 class StyleExtractor:
@@ -135,15 +136,11 @@ class StyleExtractor:
         if spacy is not None:
             try:
                 self._nlp = spacy.load(config.spacy_model, disable=["ner"])
-                # aseguramos sents
                 if not self._nlp.has_pipe("sentencizer"):
-                    # Si el modelo ya tiene parser, no hace falta; pero si no, sentencizer ayuda.
-                    # No lo forzamos si ya hay parser:
                     pass
             except Exception:
-                self._nlp = None  # fallback sin spaCy
+                self._nlp = None
 
-        # cache
         self._feature_names: Optional[List[str]] = None
 
     # -------------------------
@@ -160,14 +157,15 @@ class StyleExtractor:
         if not texts:
             return np.zeros((0, 0), dtype=np.float32)
 
-        # Si hay spaCy, procesamos con pipe (más rápido)
         if self._nlp is not None:
             docs = list(self._nlp.pipe((self._normalize(t) for t in texts), batch_size=batch_size))
-            feat_dicts = [self._extract_style_features(self._normalize(texts[i]), docs[i]) for i in range(len(texts))]
+            feat_dicts = [
+                self._extract_style_features(self._normalize(texts[i]), docs[i])
+                for i in range(len(texts))
+            ]
         else:
             feat_dicts = [self._extract_style_features(self._normalize(t), None) for t in texts]
 
-        # feature_names estables por orden de dict
         names = self.feature_names()
         X = np.vstack(
             [np.array([d.get(k, 0.0) for k in names], dtype=np.float32) for d in feat_dicts]
@@ -189,8 +187,8 @@ class StyleExtractor:
         if self._feature_names is not None:
             return self._feature_names
 
-        # Generamos nombres desde un dict “dummy”
-        dummy = self._extract_style_features("test", self._nlp("test") if self._nlp is not None else None)
+        dummy_doc = self._nlp("test") if self._nlp is not None else None
+        dummy = self._extract_style_features("test", dummy_doc)
         self._feature_names = list(dummy.keys())
         return self._feature_names
 
@@ -207,17 +205,17 @@ class StyleExtractor:
             "oov_zipf_threshold": self.config.oov_zipf_threshold,
             "compute_diversity": self.config.compute_diversity,
             "extra_signals": self.config.extra_signals,
+            "normalize_features": self.config.normalize_features,
             "feature_dim": len(self.feature_names()),
         }
 
     # -------------------------
-    # Logging helpers (paradigma: escribir en logs/ como preprocess)
+    # Logging helpers
     # -------------------------
 
     @staticmethod
     def _ensure_dir(p):
         from pathlib import Path
-
         pp = Path(p)
         pp.mkdir(parents=True, exist_ok=True)
         return pp
@@ -226,7 +224,6 @@ class StyleExtractor:
     def _append_log_line(log_file, msg: str) -> None:
         from datetime import datetime
         from pathlib import Path
-
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         with open(log_file, "a", encoding="utf-8") as f:
@@ -234,10 +231,7 @@ class StyleExtractor:
 
     @staticmethod
     def _format_kv(d: Dict[str, Any]) -> str:
-        parts = []
-        for k, v in d.items():
-            parts.append(f"{k}={v}")
-        return " | ".join(parts)
+        return " | ".join([f"{k}={v}" for k, v in d.items()])
 
     # -------------------------
     # Persistence (PKL) + LOG
@@ -250,30 +244,13 @@ class StyleExtractor:
         ids: Optional[List[Any]] = None,
         batch_size: int = 64,
         metadata: Optional[Dict[str, Any]] = None,
-        # ✅ NUEVO: log (misma idea que preprocess: se pasa log_dir)
         log_dir=None,
         log_name: str = "style_extractor.log",
     ) -> None:
-        """
-        Guarda:
-        {
-          "ids": optional,
-          "X": (N,D),
-          "feature_names": [...],
-          "num_samples": N,
-          "feature_dim": D,
-          "meta": {...}
-        }
-
-        Logging:
-        - Si log_dir se especifica, se escribe un .log con:
-          start/end, input/output, #samples, dim, batch_size, flags de config, errores.
-        """
         import pickle
         from pathlib import Path
 
         t0 = time.time()
-
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -297,6 +274,7 @@ class StyleExtractor:
                         "compute_oov": self.config.compute_oov,
                         "compute_diversity": self.config.compute_diversity,
                         "extra_signals": self.config.extra_signals,
+                        "normalize_features": self.config.normalize_features,
                         "oov_zipf_threshold": self.config.oov_zipf_threshold,
                     }
                 ),
@@ -304,7 +282,6 @@ class StyleExtractor:
             if metadata:
                 self._append_log_line(log_file, f"metadata_keys={list(metadata.keys())}")
 
-        # Validaciones
         if ids is not None and len(ids) != len(texts):
             msg = f"ids length ({len(ids)}) must match texts length ({len(texts)})."
             if log_file:
@@ -356,20 +333,18 @@ class StyleExtractor:
     # -------------------------
 
     def _extract_style_features(self, text_raw: str, doc_raw) -> Dict[str, float]:
-        # Tokenización “mínima” si no hay spaCy
         if doc_raw is None:
             tokens = re.findall(r"\w+|\S", text_raw, flags=re.UNICODE)
             words = [t for t in tokens if re.match(r"^\w+$", t, flags=re.UNICODE)]
             sents = self._split_sentences_simple(text_raw)
-            # Sin POS/deps, devolvemos lo mejor posible con heurísticas
-            return self._extract_without_spacy(text_raw, words, sents)
+            feats = self._extract_without_spacy(text_raw, words, sents)
+            return self._normalize_feature_dict(feats) if self.config.normalize_features else self._safe_dict(feats)
 
         tokens = [t for t in doc_raw if not t.is_space]
         words_alpha = [t for t in tokens if t.is_alpha]
         N = len(tokens)
         N_alpha = len(words_alpha)
 
-        # Sentences
         try:
             sents = list(doc_raw.sents)
             num_sents = len(sents) or 1
@@ -377,28 +352,18 @@ class StyleExtractor:
             sents = self._split_sentences_simple(text_raw)
             num_sents = len(sents) or 1
 
-        # ------------
-        # 1) Readability: Flesch–Szigriszt (IFSZ) aproximado
-        # ------------
         ifsz = 0.0
         if self.config.compute_readability and textstat is not None:
             try:
-                # OJO: textstat es principalmente inglés; esto es aproximado pero útil como proxy.
                 wc = max(int(textstat.lexicon_count(text_raw, removepunct=True)), 1)
                 sc = max(int(textstat.sentence_count(text_raw)), 1)
                 syll = max(int(textstat.syllable_count(text_raw)), 1)
-
                 syll_per_word = float(syll) / wc
                 words_per_sent = float(wc) / sc
-
-                # Fórmula usada en tu borrador
                 ifsz = 206.835 - 62.3 * syll_per_word - words_per_sent
             except Exception:
                 ifsz = 0.0
 
-        # ------------
-        # 2) Formality: F-score (Heylighen & Dewaele) basado en POS
-        # ------------
         formality_f = 0.0
         if self.config.compute_formality:
             pos_counts = self._pos_counter(tokens)
@@ -417,40 +382,24 @@ class StyleExtractor:
             num_formal = (noun + adj + prep + det) - (pron + verb + adv + interj)
             formality_f = (float(num_formal) / total_pos) * 100.0
 
-        # ------------
-        # 3) Complejidad y estructura
-        # ------------
         len_sent = float(N) / float(num_sents)
-
-        # subordinadas (SCONJ) por oración
         num_sconj = sum(1 for t in tokens if t.pos_ == "SCONJ")
         sconj_per_sent = float(num_sconj) / float(num_sents)
-
-        # profundidad sintáctica promedio (proxy de complejidad)
         avg_dep_depth = self._avg_dependency_depth(doc_raw)
-
-        # clauses proxy: conteo de verbos (VERB/AUX) por oración
         num_verbs = sum(1 for t in tokens if t.pos_ in ("VERB", "AUX"))
         verbs_per_sent = float(num_verbs) / float(num_sents)
 
-        # ------------
-        # 4) Léxico y diversidad
-        # ------------
         words_lower = [t.text.lower() for t in words_alpha]
         V = len(set(words_lower))
         ttr = float(V) / float(max(N_alpha, 1))
         redundancy = 1.0 - ttr
 
-        # Métricas más robustas (menos sensibles a longitud)
         herdans_c = 0.0
         rttr = 0.0
         if self.config.compute_diversity:
             herdans_c = self._herdans_c(V, N_alpha)
             rttr = self._root_ttr(V, N_alpha)
 
-        # ------------
-        # 5) Distribución POS (estilo gramatical)
-        # ------------
         pos_counts = self._pos_counter(tokens)
         total_pos = sum(pos_counts.values()) or 1
 
@@ -462,12 +411,8 @@ class StyleExtractor:
         pos_det_ratio = float(pos_counts.get("DET", 0)) / total_pos
         pos_adp_ratio = float(pos_counts.get("ADP", 0)) / total_pos
 
-        # ------------
-        # 6) Calidad ortográfica aproximada (OOV por frecuencia)
-        # ------------
         error_rate = 0.0
         if self.config.compute_oov and zipf_frequency is not None:
-            # palabras “muy raras” como proxy de OOV / errores
             rare = 0
             for w in words_lower:
                 if not w.isalpha():
@@ -476,31 +421,19 @@ class StyleExtractor:
                     rare += 1
             error_rate = float(rare) / float(max(len(words_lower), 1))
 
-        # ------------
-        # 7) Señales extra de estilo (muy útiles en fake news)
-        # ------------
         extra = self._extra_style_signals(text_raw, tokens, words_lower, num_sents) if self.config.extra_signals else {}
 
         feats: Dict[str, float] = {
-            # Legibilidad
             "ifsz": float(ifsz),
-
-            # Formalidad
             "formality_f": float(formality_f),
-
-            # Complejidad / estructura
             "len_sent": float(len_sent),
             "sconj_per_sent": float(sconj_per_sent),
             "avg_dep_depth": float(avg_dep_depth),
             "verbs_per_sent": float(verbs_per_sent),
-
-            # Léxico y diversidad
             "ttr": float(ttr),
             "redundancy": float(redundancy),
             "herdans_c": float(herdans_c),
             "root_ttr": float(rttr),
-
-            # Distribución POS
             "pos_noun_ratio": float(pos_noun_ratio),
             "pos_verb_ratio": float(pos_verb_ratio),
             "pos_adj_ratio": float(pos_adj_ratio),
@@ -508,16 +441,14 @@ class StyleExtractor:
             "pos_pron_ratio": float(pos_pron_ratio),
             "pos_det_ratio": float(pos_det_ratio),
             "pos_adp_ratio": float(pos_adp_ratio),
-
-            # Ortografía aproximada
             "error_rate": float(error_rate),
         }
 
         feats.update(extra)
-        return self._safe_dict(feats)
+        return self._normalize_feature_dict(feats) if self.config.normalize_features else self._safe_dict(feats)
 
     # -------------------------
-    # Fallback sin spaCy (heurístico)
+    # Fallback sin spaCy
     # -------------------------
 
     def _extract_without_spacy(self, text_raw: str, words: List[str], sents: List[str]) -> Dict[str, float]:
@@ -526,7 +457,6 @@ class StyleExtractor:
         words_lower = [w.lower() for w in words]
         V = len(set(words_lower))
 
-        # Readability (aprox)
         ifsz = 0.0
         if self.config.compute_readability and textstat is not None:
             try:
@@ -539,11 +469,8 @@ class StyleExtractor:
             except Exception:
                 ifsz = 0.0
 
-        # Formality no disponible sin POS
         formality_f = 0.0
-
         len_sent = float(max(N_alpha, 0)) / float(num_sents)
-        # subordinación proxy: conteo de "que", "porque", "aunque", etc.
         sconj_proxy = sum(1 for w in words_lower if w in {"que", "porque", "aunque", "si", "cuando", "mientras", "donde"})
         sconj_per_sent = float(sconj_proxy) / float(num_sents)
 
@@ -560,7 +487,6 @@ class StyleExtractor:
                     rare += 1
             error_rate = float(rare) / float(max(len(words_lower), 1))
 
-        # Extra signals (sin tokens spaCy, pasamos tokens como lista “fake”)
         extra = self._extra_style_signals(text_raw, None, words_lower, num_sents) if self.config.extra_signals else {}
 
         feats: Dict[str, float] = {
@@ -584,18 +510,16 @@ class StyleExtractor:
             "error_rate": float(error_rate),
         }
         feats.update(extra)
-        return self._safe_dict(feats)
+        return feats
 
     # -------------------------
-    # Extra stylometric signals (focus thesis)
+    # Extra stylometric signals
     # -------------------------
 
     def _extra_style_signals(self, text: str, tokens, words_lower: List[str], num_sents: int) -> Dict[str, float]:
-        # Longitudes
         num_chars = max(len(text), 1)
         num_words = max(len(words_lower), 1)
 
-        # Puntuación y signos
         num_excl = text.count("!")
         num_q = text.count("?")
         num_ellipsis = len(re.findall(r"\.{3,}", text))
@@ -604,79 +528,134 @@ class StyleExtractor:
         punct = sum(1 for c in text if (not c.isalnum() and not c.isspace()))
         punct_ratio = float(punct) / num_chars
 
-        # Mayúsculas
         letters = sum(1 for c in text if c.isalpha())
         upper = sum(1 for c in text if c.isupper())
         uppercase_ratio = float(upper) / float(max(letters, 1))
 
-        # Palabras largas / promedio
         avg_word_len = float(sum(len(w) for w in words_lower)) / num_words
         long_word_ratio = float(sum(1 for w in words_lower if len(w) >= 8)) / num_words
 
-        # Stopwords / function words ratio (proxy de estilo más “natural”)
         stop_ratio = float(sum(1 for w in words_lower if w in self.stopwords)) / num_words
 
-        # Dígitos y símbolos (clickbait suele usar números/porcentajes)
         digit_chars = sum(1 for c in text if c.isdigit())
         digit_ratio = float(digit_chars) / num_chars
         percent_ratio = float(text.count("%")) / num_chars
 
-        # Repeticiones (alargamientos tipo "increíííble", "!!!!")
         repeated_char_ratio = self._repeated_char_ratio(text)
-
-        # Intensificadores (lexical cues)
         intensifier_ratio = float(sum(1 for w in words_lower if w in self.intensifiers)) / num_words
 
-        # Pasiva / impersonal (heurística en español):
-        # - "se" pasiva/impersonal: frecuencia de "se" por oración
         se_count = sum(1 for w in words_lower if w == "se")
         se_per_sent = float(se_count) / float(max(num_sents, 1))
 
-        # Modalidad / hedging (señales de falta de certeza)
         hedge_words = {"podría", "podrian", "posible", "posiblemente", "al parecer", "según", "presuntamente", "dicen"}
-        hedge_count = 0
-        for w in words_lower:
-            if w in hedge_words:
-                hedge_count += 1
+        hedge_count = sum(1 for w in words_lower if w in hedge_words)
         hedge_ratio = float(hedge_count) / num_words
 
-        # Named-entity proxy (sin NER): proporción de tokens Capitalizados “internos”
         proper_like_ratio = 0.0
         if tokens is not None:
             propn = sum(1 for t in tokens if getattr(t, "pos_", "") == "PROPN")
             total = len(tokens) or 1
             proper_like_ratio = float(propn) / total
 
-        # Burstiness: varianza de longitud de oración
         sent_lens = self._sentence_lengths_simple(text)
         burstiness = float(np.std(sent_lens)) if sent_lens else 0.0
 
         return {
-            # punctuation / emphasis
             "sig_punct_ratio": punct_ratio,
             "sig_excl_per_sent": float(num_excl) / float(max(num_sents, 1)),
             "sig_q_per_sent": float(num_q) / float(max(num_sents, 1)),
             "sig_ellipsis_per_sent": float(num_ellipsis) / float(max(num_sents, 1)),
             "sig_quotes_ratio": float(num_quotes) / num_chars,
-
-            # casing / formatting
             "sig_uppercase_ratio": uppercase_ratio,
             "sig_repeated_char_ratio": repeated_char_ratio,
-
-            # lexical surface
             "sig_avg_word_len": avg_word_len,
             "sig_long_word_ratio": long_word_ratio,
             "sig_stopword_ratio": stop_ratio,
             "sig_digit_ratio": digit_ratio,
             "sig_percent_ratio": percent_ratio,
             "sig_intensifier_ratio": intensifier_ratio,
-
-            # discourse/stance proxies
             "sig_se_per_sent": se_per_sent,
             "sig_hedge_ratio": hedge_ratio,
             "sig_proper_like_ratio": proper_like_ratio,
             "sig_burstiness": burstiness,
         }
+
+    # -------------------------
+    # Normalización por tipo
+    # -------------------------
+
+    def _normalize_feature_dict(self, feats: Dict[str, float]) -> Dict[str, float]:
+        """
+        Normaliza por tipo:
+        - ratios/proporciones -> clip [0, 1]
+        - formalidad -> tanh(x / 100) en [-1, 1]
+        - ifsz -> tanh(x / 100) en [-1, 1]
+        - métricas positivas de tamaño/complejidad -> log1p(x)
+        - herdans_c -> tanh(x / 5)
+        - root_ttr -> log1p(x)
+        """
+        out: Dict[str, float] = {}
+
+        ratio_features = {
+            "ttr",
+            "redundancy",
+            "pos_noun_ratio",
+            "pos_verb_ratio",
+            "pos_adj_ratio",
+            "pos_adv_ratio",
+            "pos_pron_ratio",
+            "pos_det_ratio",
+            "pos_adp_ratio",
+            "error_rate",
+            "sig_punct_ratio",
+            "sig_quotes_ratio",
+            "sig_uppercase_ratio",
+            "sig_repeated_char_ratio",
+            "sig_long_word_ratio",
+            "sig_stopword_ratio",
+            "sig_digit_ratio",
+            "sig_percent_ratio",
+            "sig_intensifier_ratio",
+            "sig_hedge_ratio",
+            "sig_proper_like_ratio",
+        }
+
+        positive_count_like = {
+            "len_sent",
+            "sconj_per_sent",
+            "avg_dep_depth",
+            "verbs_per_sent",
+            "root_ttr",
+            "sig_excl_per_sent",
+            "sig_q_per_sent",
+            "sig_ellipsis_per_sent",
+            "sig_avg_word_len",
+            "sig_se_per_sent",
+            "sig_burstiness",
+        }
+
+        for k, v in feats.items():
+            x = float(v)
+
+            if k in ratio_features:
+                out[k] = float(np.clip(x, 0.0, 1.0))
+
+            elif k == "formality_f":
+                out[k] = float(np.tanh(x / 100.0))
+
+            elif k == "ifsz":
+                out[k] = float(np.tanh(x / 100.0))
+
+            elif k == "herdans_c":
+                out[k] = float(np.tanh(x / 5.0))
+
+            elif k in positive_count_like:
+                out[k] = float(np.log1p(max(x, 0.0)))
+
+            else:
+                out[k] = x
+
+        return self._safe_dict(out)
 
     # -------------------------
     # Helpers
@@ -713,10 +692,6 @@ class StyleExtractor:
 
     @staticmethod
     def _avg_dependency_depth(doc) -> float:
-        """
-        Proxy de complejidad: profundidad promedio en el árbol de dependencias.
-        Requiere spaCy con parser.
-        """
         try:
             depths = []
             for token in doc:
@@ -756,8 +731,7 @@ class StyleExtractor:
 
     @staticmethod
     def _dict_to_vector(feat_dict: Dict[str, float]) -> np.ndarray:
-        keys = list(feat_dict.keys())
-        vals = [feat_dict[k] for k in keys]
+        vals = [feat_dict[k] for k in feat_dict.keys()]
         return np.array(vals, dtype=np.float32)
 
     def _safe(self, x: np.ndarray) -> np.ndarray:
@@ -778,10 +752,10 @@ class StyleExtractor:
 
 
 """
-Herramientas utilizadas (dependencias / técnicas):
-- spaCy: tokenización, segmentación en oraciones, POS tagging y (si el modelo lo incluye) dependencias.
-- textstat: conteos y aproximación de sílabas/oraciones/palabras para legibilidad (IFSZ aproximado).
-- wordfreq (zipf_frequency): proxy de "OOV"/rare words para calidad ortográfica aproximada.
-- regex (re) + heurísticas: señales de estilo (puntuación, repetición, mayúsculas, etc.).
-- numpy: construcción de vectores y estadísticas simples (media/std).
+Herramientas utilizadas:
+- spaCy: tokenización, segmentación en oraciones, POS tagging y dependencias.
+- textstat: conteos y aproximación de sílabas/oraciones/palabras para legibilidad.
+- wordfreq (zipf_frequency): proxy de OOV/rare words.
+- regex + heurísticas: señales de estilo.
+- numpy: vectores y estadísticas.
 """

@@ -50,7 +50,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -141,7 +141,8 @@ class ExtractConfig:
     batch_size: int = 8
     num_workers: int = 0
     device: str = "cpu"  # "cuda" if available
-    fp16: bool = False  # set True only if you know your GPU supports it
+    fp16: bool = False   # set True only if you know your GPU supports it
+    l2_normalize: bool = True  # NUEVO: normaliza embedding final
 
 
 # =====================================================
@@ -208,6 +209,18 @@ def cls_pooling(last_hidden_state: torch.Tensor) -> torch.Tensor:
 
 
 # =====================================================
+# Normalization helper
+# =====================================================
+def l2_normalize_np(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """
+    L2 normalize each row vector.
+    x: [B, D]
+    """
+    norms = np.linalg.norm(x, axis=1, keepdims=True)
+    return x / np.clip(norms, eps, None)
+
+
+# =====================================================
 # Core extraction
 # =====================================================
 @torch.no_grad()
@@ -261,11 +274,13 @@ def extract_embeddings(
         collate_fn=collate_fn,
     )
 
-    logger.info(f"Extracting embeddings: N={len(df)} | batch_size={cfg.batch_size} | max_len={cfg.max_len} | pooling={cfg.pooling}")
+    logger.info(
+        f"Extracting embeddings: N={len(df)} | batch_size={cfg.batch_size} | "
+        f"max_len={cfg.max_len} | pooling={cfg.pooling} | l2_normalize={cfg.l2_normalize}"
+    )
     out = np.zeros((len(df), hidden_size), dtype=np.float32)
 
     use_amp = bool(cfg.fp16 and device.type == "cuda")
-    autocast_ctx = torch.cuda.amp.autocast if use_amp else torch.cpu.amp.autocast  # type: ignore[attr-defined]
 
     for step, batch in enumerate(loader, start=1):
         idxs = batch.pop("idxs").numpy()
@@ -288,6 +303,13 @@ def extract_embeddings(
                 raise ValueError(f"Unknown pooling: {cfg.pooling}. Use: mean | cls | attention")
 
         emb = emb.detach().cpu().numpy().astype(np.float32)
+
+        # =====================================================
+        # NUEVO: L2 normalization
+        # =====================================================
+        if cfg.l2_normalize:
+            emb = l2_normalize_np(emb)
+
         out[idxs] = emb
 
         if step % 20 == 0:
@@ -348,6 +370,7 @@ def _save_features_pkl(
     out_df["pooling"] = cfg.pooling
     out_df["model_name"] = cfg.model_name
     out_df["max_len"] = cfg.max_len
+    out_df["l2_normalize"] = cfg.l2_normalize
 
     output_pkl.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_pickle(output_pkl)
@@ -369,6 +392,7 @@ def extract_semantic_features_for_splits(
     batch_size: int = 8,
     device: str = "cpu",
     num_workers: int = 0,
+    l2_normalize: bool = True,
 ) -> None:
     """
     Extract and save semantic embeddings for train/val/test splits.
@@ -379,9 +403,9 @@ def extract_semantic_features_for_splits(
       input_dir/test.pkl
 
     Writes:
-      output_dir/train_features.pkl
-      output_dir/val_features.pkl
-      output_dir/test_features.pkl
+      output_dir/train_semantic.pkl
+      output_dir/val_semantic.pkl
+      output_dir/test_semantic.pkl
     """
     logger = get_logger(log_dir=log_dir)
 
@@ -393,6 +417,7 @@ def extract_semantic_features_for_splits(
         num_workers=num_workers,
         device=device,
         fp16=False,
+        l2_normalize=l2_normalize,
     )
 
     try:
@@ -404,6 +429,7 @@ def extract_semantic_features_for_splits(
         logger.info(f"Output dir: {output_dir.resolve()}")
         logger.info(f"Model: {cfg.model_name}")
         logger.info(f"Pooling: {cfg.pooling}")
+        logger.info(f"L2 normalize: {cfg.l2_normalize}")
 
         train_pkl = _resolve_split_file(input_dir, "train")
         val_pkl = _resolve_split_file(input_dir, "val")
@@ -417,19 +443,19 @@ def extract_semantic_features_for_splits(
         logger.info(f"Loading split: train ({train_pkl.name})")
         df_train = pd.read_pickle(train_pkl)
         emb_train = extract_embeddings(df_train, cfg=cfg, logger=logger)
-        _save_features_pkl(df_train, emb_train, output_dir / "train_features.pkl", cfg, logger)
+        _save_features_pkl(df_train, emb_train, output_dir / "train_semantic.pkl", cfg, logger)
 
         # Val
         logger.info(f"Loading split: val ({val_pkl.name})")
         df_val = pd.read_pickle(val_pkl)
         emb_val = extract_embeddings(df_val, cfg=cfg, logger=logger)
-        _save_features_pkl(df_val, emb_val, output_dir / "val_features.pkl", cfg, logger)
+        _save_features_pkl(df_val, emb_val, output_dir / "val_semantic.pkl", cfg, logger)
 
-        # Test (label may or may not exist)
+        # Test
         logger.info(f"Loading split: test ({test_pkl.name})")
         df_test = pd.read_pickle(test_pkl)
         emb_test = extract_embeddings(df_test, cfg=cfg, logger=logger)
-        _save_features_pkl(df_test, emb_test, output_dir / "test_features.pkl", cfg, logger)
+        _save_features_pkl(df_test, emb_test, output_dir / "test_semantic.pkl", cfg, logger)
 
         logger.info("Semantic feature extraction completed")
 

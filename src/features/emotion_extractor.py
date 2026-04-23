@@ -554,9 +554,9 @@ def extract_emotion_features_for_splits(
       input_dir/test.pkl
 
     Writes:
-      output_dir/train_features.pkl
-      output_dir/val_features.pkl
-      output_dir/test_features.pkl
+      output_dir/train_emotion.pkl
+      output_dir/val_emotion.pkl
+      output_dir/test_emotion.pkl
     """
     logger = get_logger(log_dir=log_dir)
 
@@ -594,19 +594,19 @@ def extract_emotion_features_for_splits(
         logger.info(f"Loading split: train ({train_pkl.name})")
         df_train = pd.read_pickle(train_pkl)
         payload_train = extract_emotion_features(df_train, cfg=cfg, logger=logger, text_col=text_col)
-        _save_features_pkl(df_train, payload_train, output_dir / "train_features.pkl", logger)
+        _save_features_pkl(df_train, payload_train, output_dir / "train_emotion.pkl", logger)
 
         # Val
         logger.info(f"Loading split: val ({val_pkl.name})")
         df_val = pd.read_pickle(val_pkl)
         payload_val = extract_emotion_features(df_val, cfg=cfg, logger=logger, text_col=text_col)
-        _save_features_pkl(df_val, payload_val, output_dir / "val_features.pkl", logger)
+        _save_features_pkl(df_val, payload_val, output_dir / "val_emotion.pkl", logger)
 
         # Test
         logger.info(f"Loading split: test ({test_pkl.name})")
         df_test = pd.read_pickle(test_pkl)
         payload_test = extract_emotion_features(df_test, cfg=cfg, logger=logger, text_col=text_col)
-        _save_features_pkl(df_test, payload_test, output_dir / "test_features.pkl", logger)
+        _save_features_pkl(df_test, payload_test, output_dir / "test_emotion.pkl", logger)
 
         logger.info("Emotion feature extraction completed")
 

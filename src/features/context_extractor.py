@@ -32,6 +32,13 @@ class ContextExtractorConfig:
     Embeddings:
     - Se usa hash-embedding determinístico (feature hashing) para producir vectores
       de dimensión fija SIN entrenamiento.
+
+    Notas sobre edad:
+    - Si normalize_age=True y age_cap_days no es None:
+        ctx_age_days = age_days / age_cap_days
+      quedando aproximadamente en [-1, 1].
+    - Si normalize_age=False:
+        ctx_age_days queda en días reales (cappeado si aplica).
     """
     topic_column: str = "Topic"
     source_column: str = "Source"
@@ -57,6 +64,9 @@ class ContextExtractorConfig:
     age_cap_days: Optional[int] = 3650                 # cap 10 años
     missing_age_value: float = -1.0                    # sin fecha / parse falla
 
+    # NUEVO: normalizar edad a [-1, 1] usando age_cap_days
+    normalize_age: bool = True
+
     # Numeric safety
     safe_numeric: bool = True
 
@@ -75,6 +85,7 @@ class ContextExtractor:
     - Categoría temática (Topic) -> hash-embedding
     - Tiempo:
         - Edad de la noticia en días (si hay date_column), respecto a reference_datetime_utc
+        - opcionalmente normalizada a [-1, 1]
 
     Output vector (orden fijo):
       [source_emb..., domain_emb..., topic_emb..., author_emb..., age_days, flags...]
@@ -144,7 +155,7 @@ class ContextExtractor:
         top_vec = self._hash_embed(topic, c.topic_dim, field="topic")
         aut_vec = self._hash_embed(author, c.author_dim, field="author")
 
-        # Age days
+        # Age days (ya sale normalizada si así se configura)
         age_days = self._age_in_days(row)
 
         # Build dict with stable keys
@@ -206,6 +217,9 @@ class ContextExtractor:
             "reference_datetime_utc": (
                 self.config.reference_datetime_utc.isoformat() if self.config.reference_datetime_utc else None
             ),
+            "age_cap_days": self.config.age_cap_days,
+            "missing_age_value": self.config.missing_age_value,
+            "normalize_age": self.config.normalize_age,
             "feature_dim": len(self.feature_names()),
         }
 
@@ -219,7 +233,6 @@ class ContextExtractor:
         output_path: str | Path,
         ids: Optional[List[Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        # ✅ NUEVO: logs (paradigma preprocess)
         log_dir: Optional[str | Path] = None,
         log_name: str = "context_extractor.log",
     ) -> None:
@@ -242,7 +255,6 @@ class ContextExtractor:
 
         if ids is not None and len(ids) != len(rows):
             msg = f"ids length ({len(ids)}) must match rows length ({len(rows)})."
-            # log si aplica
             if log_dir is not None:
                 log_file = Path(self._ensure_dir(log_dir)) / log_name
                 self._append_log_line(log_file, f"ERROR: {msg}")
@@ -273,6 +285,7 @@ class ContextExtractor:
                         "l2_normalize": self.config.l2_normalize,
                         "missing_age_value": self.config.missing_age_value,
                         "age_cap_days": self.config.age_cap_days,
+                        "normalize_age": self.config.normalize_age,
                     }
                 ),
             )
@@ -324,7 +337,6 @@ class ContextExtractor:
         output_path: str | Path,
         ids_column: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        # ✅ NUEVO: logs
         log_dir: Optional[str | Path] = None,
         log_name: str = "context_extractor.log",
     ) -> None:
@@ -409,28 +421,45 @@ class ContextExtractor:
         return t
 
     def _age_in_days(self, row: Dict[str, Any]) -> float:
-        dc = self.config.date_column
+        """
+        Regresa:
+        - edad normalizada a [-1, 1] si normalize_age=True y age_cap_days no es None
+        - edad en días (cappeada) si normalize_age=False
+        - missing_age_value si no hay fecha o falla el parseo
+        """
+        c = self.config
+        dc = c.date_column
+
         if not dc:
-            return float(self.config.missing_age_value)
+            return float(c.missing_age_value)
 
         raw = self._get_str(row, dc)
         if not raw:
-            return float(self.config.missing_age_value)
+            return float(c.missing_age_value)
 
         dt = self._parse_datetime(raw)
         if dt is None:
-            return float(self.config.missing_age_value)
+            return float(c.missing_age_value)
 
-        ref = self.config.reference_datetime_utc or datetime.now(timezone.utc)
+        ref = c.reference_datetime_utc or datetime.now(timezone.utc)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
 
         delta = ref - dt
         age = float(delta.total_seconds() / 86400.0)
 
-        if self.config.age_cap_days is not None:
-            cap = float(self.config.age_cap_days)
+        # cap en días
+        if c.age_cap_days is not None:
+            cap = float(c.age_cap_days)
             age = max(min(age, cap), -cap)
+
+        # normalización opcional
+        if c.normalize_age:
+            if c.age_cap_days is None or float(c.age_cap_days) <= 0.0:
+                raise ValueError(
+                    "normalize_age=True requires age_cap_days to be a positive number."
+                )
+            age = age / float(c.age_cap_days)
 
         return age
 

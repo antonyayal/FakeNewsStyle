@@ -436,7 +436,7 @@ if args.extract_emotion == 1:
         input_dir=emotion_input_dir,
         output_dir=emotion_output_dir,
         log_dir=LOGS_EMOTION_DIR,
-        text_col=args.emotion_text_column,          # ⚠️ usa text_xlmr si vienes de preprocess
+        text_col=args.emotion_text_column,          # usa text_xlmr si vienes de preprocess
         batch_size=int(args.emotion_batch_size),
         device=args.emotion_device,                 # "cuda" | "cpu"
         use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
