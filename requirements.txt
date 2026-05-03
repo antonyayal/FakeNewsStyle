@@ -24,6 +24,9 @@ spacy>=3.7.0
 textstat>=0.7.3
 wordfreq>=3.0.3
 
+# Tensorflow
+tensorflow
+
 # Utils
 scipy>=1.10
 tqdm>=4.65
