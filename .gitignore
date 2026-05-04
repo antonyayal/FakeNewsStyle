@@ -1,5 +1,7 @@
 venv/
 *.pkl
+*.npy
+*.hi5
 __pycache__/
 *.log
 .DS_Store
