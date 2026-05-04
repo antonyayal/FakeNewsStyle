@@ -160,14 +160,6 @@ parser.add_argument("--context_author_dim", type=int, default=16)
 parser.add_argument("--context_n_hashes", type=int, default=2)
 parser.add_argument("--context_unsigned", type=int, default=0)
 
-# ---- merge
-parser.add_argument("--merge_features", type=int, default=0)
-parser.add_argument("--merge_output_dir", type=str, default=None)
-parser.add_argument("--merge_missing_policy", type=str, default="fill_zero", choices=["fill_zero", "drop", "error"])
-parser.add_argument("--merge_add_presence_flags", type=int, default=1)
-parser.add_argument("--merge_log_dir", type=str, default="logs/features/merge")
-parser.add_argument("--merge_emotion_alt", type=int, default=1)
-
 # ---- VAE latent extraction
 parser.add_argument("--run_vaes", type=int, default=0)
 parser.add_argument("--semantic_latent_dim", type=int, default=128)
@@ -183,6 +175,21 @@ parser.add_argument("--vae_dropout", type=float, default=0.1)
 
 parser.add_argument("--vae_data_output_dir", type=str, default="data/vae_outputs")
 parser.add_argument("--vae_model_output_dir", type=str, default="models/vae")
+
+# ---- merge VAE latents
+parser.add_argument(
+    "--merge_vae_latents",
+    type=int,
+    default=0,
+    help="Merge VAE latent PKLs into one KAN-ready dataset (0 = No, 1 = Yes)",
+)
+
+parser.add_argument(
+    "--merge_output_dir",
+    type=str,
+    default=None,
+    help="Output dir for merged latent VAE PKLs",
+)
 
 args = parser.parse_args()
 
@@ -537,6 +544,101 @@ if args.run_vaes == 1:
     print("VAE latent feature extraction completed")
 else:
     print("VAE latent feature extraction skipped")
+
+# =====================================================
+# Step 8: Merge VAE latent outputs for KAN
+# =====================================================
+if args.merge_vae_latents == 1:
+    print("Merging VAE latent PKLs for KAN input")
+
+    import pandas as pd
+
+    latent_dims = {
+        "semantic": int(args.semantic_latent_dim),
+        "emotion": int(args.emotion_latent_dim),
+        "style": int(args.style_latent_dim),
+        "context": int(args.context_latent_dim),
+    }
+
+    latent_dirs = {
+        name: BASE_DIR / "data" / "vae_outputs" / name / f"latent{dim}"
+        for name, dim in latent_dims.items()
+    }
+
+    merge_output_dir = (
+        Path(args.merge_output_dir)
+        if args.merge_output_dir
+        else (
+            BASE_DIR
+            / "data"
+            / "vae_latent_merged"
+            / f"sem{latent_dims['semantic']}_emo{latent_dims['emotion']}_sty{latent_dims['style']}_ctx{latent_dims['context']}"
+        )
+    )
+
+    merge_output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Latent input dirs:")
+    for name, path in latent_dirs.items():
+        print(f"  {name}: {path}")
+
+    print(f"Merged output dir: {merge_output_dir}")
+
+    splits = ["train", "val", "test"]
+
+    for split in splits:
+        dfs = []
+        labels = None
+
+        for feature_name, feature_dir in latent_dirs.items():
+            pkl_path = feature_dir / f"{split}.pkl"
+
+            if not pkl_path.exists():
+                raise FileNotFoundError(f"Missing latent PKL: {pkl_path}")
+
+            df = pd.read_pickle(pkl_path)
+
+            if "label" in df.columns:
+                current_labels = df["label"].reset_index(drop=True)
+
+                if labels is None:
+                    labels = current_labels
+                else:
+                    if not labels.equals(current_labels):
+                        raise ValueError(
+                            f"Label mismatch detected in split '{split}' for feature '{feature_name}'"
+                        )
+
+                df = df.drop(columns=["label"])
+
+            df = df.reset_index(drop=True)
+
+            # Prefix columns defensively
+            df.columns = [
+                col if str(col).startswith(f"{feature_name}_")
+                else f"{feature_name}_{col}"
+                for col in df.columns
+            ]
+
+            dfs.append(df)
+
+        merged_df = pd.concat(dfs, axis=1)
+
+        if labels is not None:
+            merged_df["label"] = labels.values
+
+        out_path = merge_output_dir / f"{split}.pkl"
+        merged_df.to_pickle(out_path)
+
+        print(
+            f"Saved merged latent {split}: {out_path} | "
+            f"samples={len(merged_df)} | dims={merged_df.shape[1]}"
+        )
+
+    print("VAE latent merge completed")
+
+else:
+    print("VAE latent merge skipped")
 
 # =====================================================
 # Main training/testing
