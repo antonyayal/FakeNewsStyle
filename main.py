@@ -23,9 +23,10 @@ from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import extract_emotion_features_for_splits
 from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
 from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
-from src.features.merge_raw_features_for_kan import merge_split
+from src.features.merge_raw_features_for_kan import merge_all_splits
 from src.models.train_vae_from_pkl import train_vae_from_paths
 from src.models.kan import train_kan_from_pkls
+from src.evaluation.metrics import evaluate_binary_classifier, save_metrics
 
 try:
     import torch  # type: ignore
@@ -46,11 +47,13 @@ def _extract_texts_and_ids_from_obj(obj, text_col: str, id_col: str | None = Non
         cols = list(obj.columns)
         if text_col not in cols:
             raise ValueError(f"Column '{text_col}' not found. Available columns: {cols}")
+
         texts = obj[text_col].astype(str).tolist()
 
         ids = None
         if id_col and id_col in cols:
             ids = obj[id_col].tolist()
+
         return texts, ids
 
     if isinstance(obj, dict) and "data" in obj and isinstance(obj["data"], list):
@@ -59,17 +62,22 @@ def _extract_texts_and_ids_from_obj(obj, text_col: str, id_col: str | None = Non
     if isinstance(obj, list):
         if not obj:
             return [], None
+
         if not isinstance(obj[0], dict):
             raise ValueError("PKL list must contain dict rows.")
+
         if text_col not in obj[0]:
             raise ValueError(
                 f"Key '{text_col}' not found in PKL rows. "
                 f"Available keys: {list(obj[0].keys())}"
             )
+
         texts = [str(r.get(text_col, "")) for r in obj]
+
         ids = None
         if id_col and id_col in obj[0]:
             ids = [r.get(id_col) for r in obj]
+
         return texts, ids
 
     raise ValueError(f"Unsupported PKL content type: {type(obj)}")
@@ -78,6 +86,7 @@ def _extract_texts_and_ids_from_obj(obj, text_col: str, id_col: str | None = Non
 def _default_input_dir(user_dir: str | None, fallback_a: Path, fallback_b: Path) -> Path:
     if user_dir:
         return Path(user_dir)
+
     return fallback_a if fallback_a.exists() else fallback_b
 
 
@@ -88,6 +97,7 @@ def _ensure_dir(p: Path) -> Path:
 
 def _resolve_emotion_device(requested: str) -> str:
     req = (requested or "cpu").lower().strip()
+
     if req not in {"cpu", "cuda"}:
         req = "cpu"
 
@@ -279,6 +289,7 @@ if args.prepare_corpus == 1:
 
     try:
         generated = convert_folder_xlsx_to_pkl(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR)
+
         for p in generated:
             print(f"Saved: {p.name}")
             _log(f"saved_file={p.name}")
@@ -328,6 +339,7 @@ if args.extract_semantic == 1:
         batch_size=8,
         max_len=256,
     )
+
     print("Semantic feature extraction completed")
 else:
     print("Semantic feature extraction skipped")
@@ -343,13 +355,15 @@ if args.extract_emotion == 1:
     emotion_output_dir = BASE_DIR / "data" / "features" / "emotion"
     emotion_output_dir.mkdir(parents=True, exist_ok=True)
 
+    emotion_device = _resolve_emotion_device(args.emotion_device)
+
     extract_emotion_features_for_splits(
         input_dir=emotion_input_dir,
         output_dir=emotion_output_dir,
         log_dir=LOGS_EMOTION_DIR,
         text_col=args.emotion_text_column,
         batch_size=int(args.emotion_batch_size),
-        device=args.emotion_device,
+        device=emotion_device,
         use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
         normalize_signals_by="chars",
         extra_signals=True,
@@ -386,12 +400,17 @@ if args.extract_style == 1:
 
     for split_name, filename in splits.items():
         in_path = style_input_dir / filename
+
         if not in_path.exists():
             print(f"Skipped (missing): {in_path}")
             continue
 
         obj = _load_pkl_any(in_path)
-        texts, ids = _extract_texts_and_ids_from_obj(obj, args.style_text_column, args.style_id_column)
+        texts, ids = _extract_texts_and_ids_from_obj(
+            obj,
+            args.style_text_column,
+            args.style_id_column,
+        )
 
         out_path = style_output_dir / f"{split_name}_style.pkl"
 
@@ -449,6 +468,7 @@ if args.extract_context == 1:
 
     for split_name, filename in splits.items():
         in_path = context_input_dir / filename
+
         if not in_path.exists():
             print(f"Skipped (missing): {in_path}")
             continue
@@ -460,6 +480,7 @@ if args.extract_context == 1:
             args.context_source_column,
             args.context_link_column,
         ]
+
         missing = [c for c in required_cols if c not in df.columns]
 
         if missing:
@@ -516,15 +537,10 @@ if args.merge_raw_features == 1:
         "context": BASE_DIR / "data" / "features" / "context",
     }
 
-    raw_merge_output_dir = RAW_FEATURES_MERGE_OUTPUT_DIR
-    raw_merge_output_dir.mkdir(parents=True, exist_ok=True)
-
-    for split in ["train", "val", "test"]:
-        merge_split(
-            split=split,
-            feature_dirs=raw_feature_dirs,
-            output_dir=raw_merge_output_dir,
-        )
+    merge_all_splits(
+        feature_dirs=raw_feature_dirs,
+        output_dir=RAW_FEATURES_MERGE_OUTPUT_DIR,
+    )
 
     print("Raw feature merge completed")
 else:
@@ -705,13 +721,11 @@ else:
 
 
 # =====================================================
-# Step 10: Train KAN classifier
+# Step 10: Train KAN classifier + external evaluation
 # =====================================================
 if args.train_kan == 1:
     print("Training KAN classifier")
 
-    # Default: use VAE latent merge output.
-    # For raw-feature baseline, pass --kan_train_pkl/--kan_val_pkl/--kan_test_pkl explicitly.
     kan_train_pkl = (
         Path(args.kan_train_pkl)
         if args.kan_train_pkl
@@ -741,7 +755,7 @@ if args.train_kan == 1:
     print(f"KAN test PKL:  {kan_test_pkl}")
     print(f"KAN output:    {kan_output_dir}")
 
-    train_kan_from_pkls(
+    kan_result = train_kan_from_pkls(
         train_pkl=str(kan_train_pkl),
         val_pkl=str(kan_val_pkl),
         test_pkl=str(kan_test_pkl),
@@ -759,6 +773,45 @@ if args.train_kan == 1:
     )
 
     print("KAN training completed")
+    print("Evaluating KAN predictions")
+
+    pred_path = Path(kan_result["predictions_path"])
+
+    with open(pred_path, "rb") as f:
+        preds = pickle.load(f)
+
+    all_metrics = {}
+
+    for split in ["train", "val", "test"]:
+        y_true = np.asarray(preds[split]["y_true"])
+        y_prob = np.asarray(preds[split]["y_prob"])
+
+        split_metrics = evaluate_binary_classifier(
+            y_true=y_true,
+            y_prob=y_prob,
+            threshold=0.5,
+            n_bins=10,
+        )
+
+        all_metrics[split] = split_metrics
+
+        print(f"\n{split.upper()} METRICS")
+        for k, v in split_metrics.items():
+            if isinstance(v, float):
+                print(f"{k}: {v:.4f}")
+            else:
+                print(f"{k}: {v}")
+
+        save_metrics(
+            split_metrics,
+            kan_output_dir,
+            prefix=f"{split}_metrics",
+        )
+
+    with open(kan_output_dir / "all_metrics.pkl", "wb") as f:
+        pickle.dump(all_metrics, f)
+
+    print(f"All metrics saved in: {kan_output_dir}")
 else:
     print("KAN training skipped")
 
