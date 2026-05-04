@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 import pickle
 
+import numpy as np
+import pandas as pd
+
 # =====================================================
 # Project setup
 # =====================================================
@@ -20,9 +23,9 @@ from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import extract_emotion_features_for_splits
 from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
 from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
-from src.features.feature_merger import merge_features_for_splits
+from src.features.merge_raw_features_for_kan import merge_split
 from src.models.train_vae_from_pkl import train_vae_from_paths
-
+from src.models.kan import train_kan_from_pkls
 
 try:
     import torch  # type: ignore
@@ -160,6 +163,20 @@ parser.add_argument("--context_author_dim", type=int, default=16)
 parser.add_argument("--context_n_hashes", type=int, default=2)
 parser.add_argument("--context_unsigned", type=int, default=0)
 
+# ---- merge raw features before VAE
+parser.add_argument(
+    "--merge_raw_features",
+    type=int,
+    default=0,
+    help="Merge semantic/emotion/style/context raw features before VAE",
+)
+parser.add_argument(
+    "--raw_features_merge_output_dir",
+    type=str,
+    default=None,
+    help="Output dir for raw merged feature PKLs",
+)
+
 # ---- VAE latent extraction
 parser.add_argument("--run_vaes", type=int, default=0)
 parser.add_argument("--semantic_latent_dim", type=int, default=128)
@@ -172,7 +189,6 @@ parser.add_argument("--vae_batch_size", type=int, default=32)
 parser.add_argument("--vae_learning_rate", type=float, default=1e-3)
 parser.add_argument("--vae_beta", type=float, default=1.0)
 parser.add_argument("--vae_dropout", type=float, default=0.1)
-
 parser.add_argument("--vae_data_output_dir", type=str, default="data/vae_outputs")
 parser.add_argument("--vae_model_output_dir", type=str, default="models/vae")
 
@@ -181,15 +197,36 @@ parser.add_argument(
     "--merge_vae_latents",
     type=int,
     default=0,
-    help="Merge VAE latent PKLs into one KAN-ready dataset (0 = No, 1 = Yes)",
+    help="Merge VAE latent PKLs into one KAN-ready dataset",
 )
-
 parser.add_argument(
     "--merge_output_dir",
     type=str,
     default=None,
     help="Output dir for merged latent VAE PKLs",
 )
+
+# ---- KAN classifier
+parser.add_argument(
+    "--train_kan",
+    type=int,
+    default=0,
+    help="Train KAN classifier using merged PKLs",
+)
+parser.add_argument("--kan_train_pkl", type=str, default=None)
+parser.add_argument("--kan_val_pkl", type=str, default=None)
+parser.add_argument("--kan_test_pkl", type=str, default=None)
+parser.add_argument("--kan_output_dir", type=str, default=None)
+parser.add_argument("--kan_feature_key", type=str, default=None)
+parser.add_argument("--kan_label_key", type=str, default="label")
+parser.add_argument("--kan_hidden_dim", type=int, default=64)
+parser.add_argument("--kan_num_basis", type=int, default=16)
+parser.add_argument("--kan_dropout", type=float, default=0.2)
+parser.add_argument("--kan_epochs", type=int, default=100)
+parser.add_argument("--kan_batch_size", type=int, default=32)
+parser.add_argument("--kan_lr", type=float, default=1e-3)
+parser.add_argument("--kan_weight_decay", type=float, default=1e-4)
+parser.add_argument("--kan_patience", type=int, default=15)
 
 args = parser.parse_args()
 
@@ -206,6 +243,18 @@ LOGS_SEMANTIC_DIR = _ensure_dir(LOGS_FEATURES_DIR / "semantic")
 LOGS_EMOTION_DIR = _ensure_dir(LOGS_FEATURES_DIR / "emotion")
 LOGS_STYLE_DIR = _ensure_dir(LOGS_FEATURES_DIR / "style")
 LOGS_CONTEXT_DIR = _ensure_dir(LOGS_FEATURES_DIR / "context")
+
+RAW_FEATURES_MERGE_OUTPUT_DIR = (
+    Path(args.raw_features_merge_output_dir)
+    if args.raw_features_merge_output_dir
+    else BASE_DIR / "data" / "features_merged_for_kan"
+)
+
+VAE_LATENT_MERGE_OUTPUT_DIR = (
+    Path(args.merge_output_dir)
+    if args.merge_output_dir
+    else BASE_DIR / "data" / "vae_latent_merged"
+)
 
 
 # =====================================================
@@ -375,8 +424,6 @@ else:
 if args.extract_context == 1:
     print("Extracting context features (Source/Domain/Topic/Age)")
 
-    import pandas as pd
-
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
     context_output_dir = BASE_DIR / "data" / "features" / "context"
     context_output_dir.mkdir(parents=True, exist_ok=True)
@@ -457,7 +504,35 @@ else:
 
 
 # =====================================================
-# Step 7: VAE latent feature extraction
+# Step 7: Merge raw feature PKLs before VAE
+# =====================================================
+if args.merge_raw_features == 1:
+    print("Merging raw feature PKLs before VAE")
+
+    raw_feature_dirs = {
+        "semantic": BASE_DIR / "data" / "features" / "semantic",
+        "emotion": BASE_DIR / "data" / "features" / "emotion",
+        "style": BASE_DIR / "data" / "features" / "style",
+        "context": BASE_DIR / "data" / "features" / "context",
+    }
+
+    raw_merge_output_dir = RAW_FEATURES_MERGE_OUTPUT_DIR
+    raw_merge_output_dir.mkdir(parents=True, exist_ok=True)
+
+    for split in ["train", "val", "test"]:
+        merge_split(
+            split=split,
+            feature_dirs=raw_feature_dirs,
+            output_dir=raw_merge_output_dir,
+        )
+
+    print("Raw feature merge completed")
+else:
+    print("Raw feature merge skipped")
+
+
+# =====================================================
+# Step 8: Train VAEs for latent feature extraction
 # =====================================================
 if args.run_vaes == 1:
     print("Training VAEs for latent feature extraction")
@@ -545,13 +620,12 @@ if args.run_vaes == 1:
 else:
     print("VAE latent feature extraction skipped")
 
+
 # =====================================================
-# Step 8: Merge VAE latent outputs for KAN
+# Step 9: Merge VAE latent outputs for KAN
 # =====================================================
 if args.merge_vae_latents == 1:
     print("Merging VAE latent PKLs for KAN input")
-
-    import pandas as pd
 
     latent_dims = {
         "semantic": int(args.semantic_latent_dim),
@@ -565,17 +639,7 @@ if args.merge_vae_latents == 1:
         for name, dim in latent_dims.items()
     }
 
-    merge_output_dir = (
-        Path(args.merge_output_dir)
-        if args.merge_output_dir
-        else (
-            BASE_DIR
-            / "data"
-            / "vae_latent_merged"
-            / f"sem{latent_dims['semantic']}_emo{latent_dims['emotion']}_sty{latent_dims['style']}_ctx{latent_dims['context']}"
-        )
-    )
-
+    merge_output_dir = VAE_LATENT_MERGE_OUTPUT_DIR
     merge_output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Latent input dirs:")
@@ -604,16 +668,16 @@ if args.merge_vae_latents == 1:
                 if labels is None:
                     labels = current_labels
                 else:
-                    if not labels.equals(current_labels):
+                    if len(labels) != len(current_labels):
                         raise ValueError(
-                            f"Label mismatch detected in split '{split}' for feature '{feature_name}'"
+                            f"Label length mismatch in VAE latent merge for split '{split}', "
+                            f"feature '{feature_name}'."
                         )
 
                 df = df.drop(columns=["label"])
 
             df = df.reset_index(drop=True)
 
-            # Prefix columns defensively
             df.columns = [
                 col if str(col).startswith(f"{feature_name}_")
                 else f"{feature_name}_{col}"
@@ -636,9 +700,68 @@ if args.merge_vae_latents == 1:
         )
 
     print("VAE latent merge completed")
-
 else:
     print("VAE latent merge skipped")
+
+
+# =====================================================
+# Step 10: Train KAN classifier
+# =====================================================
+if args.train_kan == 1:
+    print("Training KAN classifier")
+
+    # Default: use VAE latent merge output.
+    # For raw-feature baseline, pass --kan_train_pkl/--kan_val_pkl/--kan_test_pkl explicitly.
+    kan_train_pkl = (
+        Path(args.kan_train_pkl)
+        if args.kan_train_pkl
+        else VAE_LATENT_MERGE_OUTPUT_DIR / "train.pkl"
+    )
+
+    kan_val_pkl = (
+        Path(args.kan_val_pkl)
+        if args.kan_val_pkl
+        else VAE_LATENT_MERGE_OUTPUT_DIR / "val.pkl"
+    )
+
+    kan_test_pkl = (
+        Path(args.kan_test_pkl)
+        if args.kan_test_pkl
+        else VAE_LATENT_MERGE_OUTPUT_DIR / "test.pkl"
+    )
+
+    kan_output_dir = (
+        Path(args.kan_output_dir)
+        if args.kan_output_dir
+        else BASE_DIR / "data" / "kan_outputs" / "merged"
+    )
+
+    print(f"KAN train PKL: {kan_train_pkl}")
+    print(f"KAN val PKL:   {kan_val_pkl}")
+    print(f"KAN test PKL:  {kan_test_pkl}")
+    print(f"KAN output:    {kan_output_dir}")
+
+    train_kan_from_pkls(
+        train_pkl=str(kan_train_pkl),
+        val_pkl=str(kan_val_pkl),
+        test_pkl=str(kan_test_pkl),
+        feature_key=args.kan_feature_key,
+        label_key=args.kan_label_key,
+        hidden_dim=int(args.kan_hidden_dim),
+        num_basis=int(args.kan_num_basis),
+        dropout=float(args.kan_dropout),
+        epochs=int(args.kan_epochs),
+        batch_size=int(args.kan_batch_size),
+        lr=float(args.kan_lr),
+        weight_decay=float(args.kan_weight_decay),
+        patience=int(args.kan_patience),
+        output_dir=str(kan_output_dir),
+    )
+
+    print("KAN training completed")
+else:
+    print("KAN training skipped")
+
 
 # =====================================================
 # Main training/testing

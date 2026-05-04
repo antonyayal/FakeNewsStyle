@@ -2,6 +2,7 @@ venv/
 *.pkl
 *.npy
 *.hi5
+*.pt
 __pycache__/
 *.log
 .DS_Store

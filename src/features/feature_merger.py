@@ -34,11 +34,11 @@ from pathlib import Path
 from src.features.feature_merger import merge_features_for_splits
 
 merge_features_for_splits(
-    semantic_dir=Path("data/features/semantic/FakeNewsCorpusSpanish"),
-    emotion_dir=Path("data/features/emotion/FakeNewsCorpusSpanish"),
-    style_dir=Path("data/features/style/FakeNewsCorpusSpanish"),
-    context_dir=Path("data/features/context/FakeNewsCorpusSpanish"),
-    output_dir=Path("data/features/merged/FakeNewsCorpusSpanish"),
+    semantic_dir=Path("data/features/semantic"),
+    emotion_dir=Path("data/features/emotion"),
+    style_dir=Path("data/features/style"),
+    context_dir=Path("data/features/context"),
+    output_dir=Path("data/features/merged"),
     log_dir=Path("logs/features/merge"),
     missing_policy="fill_zero",  # "fill_zero" | "drop" | "error"
     add_presence_flags=True,
