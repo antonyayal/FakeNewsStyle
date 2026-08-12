@@ -34,6 +34,13 @@ from src.experiments.run_logger import MODALITY_ORDER
 DEFAULT_METRICS = ["accuracy", "f1", "roc_auc", "log_loss"]
 
 
+def _format_ts(iso_str: str) -> str:
+    try:
+        return datetime.fromisoformat(iso_str).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return iso_str
+
+
 # =====================================================
 # Loading results/*.json
 # =====================================================
@@ -53,6 +60,7 @@ def load_all_results(results_dir: Path) -> List[Dict[str, Any]]:
 def flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
     flat = {
         "run_id": record["run_id"],
+        "run_datetime": _format_ts(record["timestamp"]),
         "timestamp": record["timestamp"],
         "git_commit": record.get("git_commit"),
         "active_extractors": "+".join(record["active_extractors"]),
@@ -97,6 +105,7 @@ def plot_extractor_heatmap(
     split: str,
     metrics: List[str],
     out_path: Path,
+    generated_at: str,
 ) -> None:
     metric_cols = [f"{split}_{m}" for m in metrics if f"{split}_{m}" in df.columns]
 
@@ -110,12 +119,13 @@ def plot_extractor_heatmap(
         .rename(columns=lambda c: c.replace(f"{split}_", ""))
     )
 
-    plt.figure(figsize=(max(8, len(metric_cols) * 1.6), max(4, len(pivot) * 0.6)))
+    plt.figure(figsize=(max(8, len(metric_cols) * 1.6), max(4, len(pivot) * 0.6) + 0.6))
     sns.heatmap(pivot, annot=True, fmt=".3f", cmap="viridis", cbar_kws={"label": "value"})
     plt.title(f"Extractor combinations vs. {split} metrics\n(mean across runs)", fontsize=11)
     plt.xlabel("Metric")
     plt.ylabel("Active extractors")
-    plt.tight_layout()
+    plt.figtext(0.5, 0.01, f"Report generated: {generated_at}", ha="center", fontsize=8, color="gray")
+    plt.tight_layout(rect=(0, 0.03, 1, 1))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150)
@@ -155,13 +165,14 @@ def plot_kan_weight_histograms(record: Dict[str, Any], out_dir: Path) -> None:
 
     slices = _modality_slices(record["active_extractors"], record["latent_dims"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    run_dt = _format_ts(record["timestamp"])
 
     for modality, sl in slices.items():
         values = coeffs[sl, :, :].flatten()
 
         plt.figure(figsize=(6, 4))
         plt.hist(values, bins=50, color="#4C72B0", alpha=0.85)
-        plt.title(f"KAN input-layer weights — {modality}\nrun {record['run_id']}")
+        plt.title(f"KAN input-layer weights — {modality}\nrun {record['run_id']} ({run_dt})", fontsize=10)
         plt.xlabel("weight value")
         plt.ylabel("count")
         plt.tight_layout()
@@ -198,6 +209,7 @@ def plot_vae_weight_histograms(record: Dict[str, Any], out_dir: Path) -> None:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     vae_model_dirs = record["paths"].get("vae_model_dirs", {})
+    run_dt = _format_ts(record["timestamp"])
 
     for modality, model_dir in vae_model_dirs.items():
         model_dir = Path(model_dir)
@@ -227,7 +239,7 @@ def plot_vae_weight_histograms(record: Dict[str, Any], out_dir: Path) -> None:
 
                 plt.figure(figsize=(6, 4))
                 plt.hist(kernel.flatten(), bins=50, color="#DD8452", alpha=0.85)
-                plt.title(f"VAE {part} [{layer.name}] — {modality}\nrun {record['run_id']}")
+                plt.title(f"VAE {part} [{layer.name}] — {modality}\nrun {record['run_id']} ({run_dt})", fontsize=10)
                 plt.xlabel("weight value")
                 plt.ylabel("count")
                 plt.tight_layout()
@@ -263,15 +275,19 @@ def main():
 
     df = build_summary_table(records)
 
+    generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    df.insert(0, "report_generated_at", _format_ts(generated_at))
+
     csv_path = reports_dir / "experiments_summary.csv"
     df.to_csv(csv_path, index=False)
-    print(f"Saved summary table: {csv_path} ({len(df)} runs)")
+    print(f"Saved summary table: {csv_path} ({len(df)} runs, generated {_format_ts(generated_at)})")
 
     plot_extractor_heatmap(
         df,
         split=args.split,
         metrics=args.metrics,
         out_path=reports_dir / f"heatmap_extractor_combos_{args.split}.png",
+        generated_at=_format_ts(generated_at),
     )
 
     if not args.skip_weights:
