@@ -232,6 +232,7 @@ class ContextExtractor:
         rows: List[Dict[str, Any]],
         output_path: str | Path,
         ids: Optional[List[Any]] = None,
+        labels: Optional[List[Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         log_dir: Optional[str | Path] = None,
         log_name: str = "context_extractor.log",
@@ -304,6 +305,8 @@ class ContextExtractor:
             }
             if ids is not None:
                 payload["ids"] = list(ids)
+            if labels is not None:
+                payload["y"] = list(labels)
 
             with open(out, "wb") as f:
                 pickle.dump(payload, f)

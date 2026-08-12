@@ -192,9 +192,12 @@ def _warn_if_possibly_stale(model_path: Path, record_timestamp: str, run_id: str
         record_time = datetime.fromisoformat(record_timestamp)
         file_time = datetime.fromtimestamp(model_path.stat().st_mtime).astimezone(record_time.tzinfo)
 
-        if abs((file_time - record_time).total_seconds()) > 3600:
+        # Only flag files modified *after* this run finished (real overwrite risk).
+        # A model file being much older than the run is expected and fine — VAEs are
+        # commonly trained once and reused across many later --merge_vae_latents/--train_kan runs.
+        if (file_time - record_time).total_seconds() > 3600:
             print(
-                f"[WARNING] {model_path} was modified long after run {run_id} finished — "
+                f"[WARNING] {model_path} was modified after run {run_id} finished — "
                 "it was likely overwritten by a later run reusing the same modality+latent_dim. "
                 "These histograms may not reflect this run's actual weights."
             )

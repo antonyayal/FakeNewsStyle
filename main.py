@@ -83,6 +83,21 @@ def _extract_texts_and_ids_from_obj(obj, text_col: str, id_col: str | None = Non
     raise ValueError(f"Unsupported PKL content type: {type(obj)}")
 
 
+def _extract_labels_from_obj(obj, label_col: str = "label"):
+    if hasattr(obj, "columns") and hasattr(obj, "__getitem__"):
+        if label_col in obj.columns:
+            return obj[label_col].tolist()
+        return None
+
+    if isinstance(obj, dict) and "data" in obj and isinstance(obj["data"], list):
+        obj = obj["data"]
+
+    if isinstance(obj, list) and obj and isinstance(obj[0], dict) and label_col in obj[0]:
+        return [r.get(label_col) for r in obj]
+
+    return None
+
+
 def _default_input_dir(user_dir: str | None, fallback_a: Path, fallback_b: Path) -> Path:
     if user_dir:
         return Path(user_dir)
@@ -408,12 +423,14 @@ if args.extract_style:
             args.style_text_column,
             args.style_id_column,
         )
+        labels = _extract_labels_from_obj(obj)
 
         out_path = style_output_dir / f"{split_name}_style.pkl"
 
         style_extractor.save_features_pkl(
             texts=texts,
             ids=ids,
+            labels=labels,
             output_path=out_path,
             batch_size=int(args.style_batch_size),
             metadata={
@@ -491,6 +508,7 @@ if args.extract_context:
             if (args.context_id_column and args.context_id_column in df.columns)
             else None
         )
+        labels = df["label"].tolist() if "label" in df.columns else None
 
         rows = df.to_dict(orient="records")
         out_path = context_output_dir / f"{split_name}_context.pkl"
@@ -498,6 +516,7 @@ if args.extract_context:
         ctx_extractor.save_features_pkl(
             rows=rows,
             ids=ids,
+            labels=labels,
             output_path=out_path,
             metadata={
                 "dataset": "FakeNewsCorpusSpanish",

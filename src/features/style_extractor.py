@@ -242,6 +242,7 @@ class StyleExtractor:
         texts: List[str],
         output_path,
         ids: Optional[List[Any]] = None,
+        labels: Optional[List[Any]] = None,
         batch_size: int = 64,
         metadata: Optional[Dict[str, Any]] = None,
         log_dir=None,
@@ -301,6 +302,8 @@ class StyleExtractor:
             }
             if ids is not None:
                 payload["ids"] = list(ids)
+            if labels is not None:
+                payload["y"] = list(labels)
 
             with open(out, "wb") as f:
                 pickle.dump(payload, f)
