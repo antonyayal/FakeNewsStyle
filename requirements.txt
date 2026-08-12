@@ -30,5 +30,6 @@ tensorflow
 # Utils
 scipy>=1.10
 tqdm>=4.65
-matplotlib 
+matplotlib
+seaborn>=0.13.0
 scikit-learn

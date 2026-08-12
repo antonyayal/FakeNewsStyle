@@ -348,6 +348,8 @@ def run_training(args):
         "best_model_path": str(best_path),
         "predictions_path": str(output_dir / "predictions.pkl"),
         "predictions": predictions,
+        "epochs_run": epoch,
+        "best_val_loss": best_val_loss,
     }
 
 

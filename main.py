@@ -26,6 +26,7 @@ from src.features.context_extractor import ContextExtractor, ContextExtractorCon
 from src.features.merge_raw_features_for_kan import merge_all_splits
 from src.models.train_vae_from_pkl import train_vae_from_paths
 from src.models.kan import train_kan_from_pkls
+from src.experiments.run_logger import log_experiment_result, MODALITY_ORDER
 from src.evaluation.metrics import evaluate_binary_classifier, save_metrics
 
 try:
@@ -842,6 +843,55 @@ if args.train_kan:
         pickle.dump(all_metrics, f)
 
     print(f"All metrics saved in: {kan_output_dir}")
+
+    # ---- experiment logging (results/) ----
+    use_modality = {
+        "semantic": not args.exclude_semantic,
+        "emotion": not args.exclude_emotion,
+        "style": not args.exclude_style,
+        "context": not args.exclude_context,
+    }
+    active_extractors = [m for m in MODALITY_ORDER if use_modality[m]]
+
+    latent_dims_all = {
+        "semantic": int(args.semantic_latent_dim),
+        "emotion": int(args.emotion_latent_dim),
+        "style": int(args.style_latent_dim),
+        "context": int(args.context_latent_dim),
+    }
+
+    vae_model_dirs = {
+        name: BASE_DIR / args.vae_model_output_dir / name / f"latent{latent_dims_all[name]}"
+        for name in active_extractors
+    }
+
+    log_experiment_result(
+        active_extractors=active_extractors,
+        latent_dims=latent_dims_all,
+        vae_epochs_requested=int(args.vae_epochs),
+        kan_epochs_requested=int(args.kan_epochs),
+        kan_epochs_run=int(kan_result.get("epochs_run", args.kan_epochs)),
+        vae_hyperparams={
+            "batch_size": int(args.vae_batch_size),
+            "learning_rate": float(args.vae_learning_rate),
+            "beta": float(args.vae_beta),
+            "dropout": float(args.vae_dropout),
+        },
+        kan_hyperparams={
+            "hidden_dim": int(args.kan_hidden_dim),
+            "num_basis": int(args.kan_num_basis),
+            "dropout": float(args.kan_dropout),
+            "batch_size": int(args.kan_batch_size),
+            "lr": float(args.kan_lr),
+            "weight_decay": float(args.kan_weight_decay),
+            "patience": int(args.kan_patience),
+        },
+        metrics=all_metrics,
+        kan_output_dir=kan_output_dir,
+        kan_checkpoint_path=Path(kan_result["best_model_path"]),
+        vae_model_dirs=vae_model_dirs,
+        base_dir=BASE_DIR,
+    )
 else:
     print("KAN training skipped")
 

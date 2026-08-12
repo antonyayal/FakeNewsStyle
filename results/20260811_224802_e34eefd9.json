@@ -1,0 +1,117 @@
+{
+  "run_id": "20260811_224802_e34eefd9",
+  "timestamp": "2026-08-11T22:48:02-06:00",
+  "git_commit": "86f36458785273921907faeb2008b63c65eea836",
+  "active_extractors": [
+    "semantic",
+    "emotion",
+    "style",
+    "context"
+  ],
+  "excluded_extractors": [],
+  "latent_dims": {
+    "semantic": 128,
+    "emotion": 16,
+    "style": 16,
+    "context": 64
+  },
+  "epochs": {
+    "vae_epochs_requested": 100,
+    "kan_epochs_requested": 50,
+    "kan_epochs_run": 15
+  },
+  "vae_hyperparams": {
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "beta": 1.0,
+    "dropout": 0.1
+  },
+  "kan_hyperparams": {
+    "hidden_dim": 32,
+    "num_basis": 8,
+    "dropout": 0.5,
+    "batch_size": 32,
+    "lr": 0.001,
+    "weight_decay": 0.001,
+    "patience": 5
+  },
+  "metrics": {
+    "train": {
+      "threshold": 0.5,
+      "accuracy": 0.9104258443465492,
+      "balanced_accuracy": 0.9103329308262895,
+      "precision": 0.9696969696969697,
+      "recall": 0.8470588235294118,
+      "specificity": 0.9736070381231672,
+      "f1": 0.9042386185243328,
+      "roc_auc": 0.9724857685009487,
+      "pr_auc": 0.9720074606320699,
+      "log_loss": 0.2809532584246757,
+      "brier_score": 0.07524626319197233,
+      "ece": 0.10436797667179865,
+      "entropy_mean": 0.4188741189229045,
+      "entropy_std": 0.10942107134067665,
+      "tn": 332,
+      "fp": 9,
+      "fn": 52,
+      "tp": 288,
+      "false_positive_rate": 0.026392961876832845,
+      "false_negative_rate": 0.15294117647058825
+    },
+    "val": {
+      "threshold": 0.5,
+      "accuracy": 0.8542372881355932,
+      "balanced_accuracy": 0.8503636196262543,
+      "precision": 0.9380530973451328,
+      "recall": 0.7464788732394366,
+      "specificity": 0.954248366013072,
+      "f1": 0.8313725490196079,
+      "roc_auc": 0.9053668415723097,
+      "pr_auc": 0.8923235959814317,
+      "log_loss": 0.3815533485346092,
+      "brier_score": 0.11613079588809654,
+      "ece": 0.06352076586020194,
+      "entropy_mean": 0.4250914233094287,
+      "entropy_std": 0.11277085111918886,
+      "tn": 146,
+      "fp": 7,
+      "fn": 36,
+      "tp": 106,
+      "false_positive_rate": 0.0457516339869281,
+      "false_negative_rate": 0.2535211267605634
+    },
+    "test": {
+      "threshold": 0.5,
+      "accuracy": 0.7062937062937062,
+      "balanced_accuracy": 0.7062937062937062,
+      "precision": 0.6891025641025641,
+      "recall": 0.7517482517482518,
+      "specificity": 0.6608391608391608,
+      "f1": 0.7190635451505016,
+      "roc_auc": 0.7778375470683163,
+      "pr_auc": 0.7827045162189673,
+      "log_loss": 0.6254347587079135,
+      "brier_score": 0.21034047125838237,
+      "ece": 0.1158941353742893,
+      "entropy_mean": 0.44621624477929267,
+      "entropy_std": 0.13519828373615816,
+      "tn": 189,
+      "fp": 97,
+      "fn": 71,
+      "tp": 215,
+      "false_positive_rate": 0.33916083916083917,
+      "false_negative_rate": 0.24825174825174826
+    }
+  },
+  "paths": {
+    "kan_output_dir": "/home/antonio/Projects/FakeNewsStyle/data/kan_outputs/merged",
+    "kan_checkpoint": "/home/antonio/Projects/FakeNewsStyle/data/kan_outputs/merged/best_kan_model.pt",
+    "kan_checkpoint_snapshot": "/home/antonio/Projects/FakeNewsStyle/results/checkpoints/20260811_224802_e34eefd9_best_kan_model.pt",
+    "vae_model_dirs": {
+      "semantic": "/home/antonio/Projects/FakeNewsStyle/models/vae/semantic/latent128",
+      "emotion": "/home/antonio/Projects/FakeNewsStyle/models/vae/emotion/latent16",
+      "style": "/home/antonio/Projects/FakeNewsStyle/models/vae/style/latent16",
+      "context": "/home/antonio/Projects/FakeNewsStyle/models/vae/context/latent64"
+    }
+  }
+}
