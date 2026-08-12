@@ -34,11 +34,11 @@ from pathlib import Path
 from src.features.feature_merger import merge_features_for_splits
 
 merge_features_for_splits(
-    semantic_dir=Path("data/features/semantic"),
-    emotion_dir=Path("data/features/emotion"),
-    style_dir=Path("data/features/style"),
-    context_dir=Path("data/features/context"),
-    output_dir=Path("data/features/merged"),
+    semantic_dir=Path("data/03_features_raw/semantic"),
+    emotion_dir=Path("data/03_features_raw/emotion"),
+    style_dir=Path("data/03_features_raw/style"),
+    context_dir=Path("data/03_features_raw/context"),
+    output_dir=Path("data/04_features_merged"),
     log_dir=Path("logs/features/merge"),
     missing_policy="fill_zero",  # "fill_zero" | "drop" | "error"
     add_presence_flags=True,

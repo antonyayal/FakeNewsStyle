@@ -468,11 +468,11 @@ def main():
         description="Merge raw semantic/emotion/style/context features for KAN baseline"
     )
 
-    parser.add_argument("--semantic_dir", default="data/features/semantic")
-    parser.add_argument("--emotion_dir", default="data/features/emotion")
-    parser.add_argument("--style_dir", default="data/features/style")
-    parser.add_argument("--context_dir", default="data/features/context")
-    parser.add_argument("--output_dir", default="data/features_merged_for_kan")
+    parser.add_argument("--semantic_dir", default="data/03_features_raw/semantic")
+    parser.add_argument("--emotion_dir", default="data/03_features_raw/emotion")
+    parser.add_argument("--style_dir", default="data/03_features_raw/style")
+    parser.add_argument("--context_dir", default="data/03_features_raw/context")
+    parser.add_argument("--output_dir", default="data/04_features_merged")
 
     args = parser.parse_args()
 

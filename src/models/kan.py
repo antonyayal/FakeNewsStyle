@@ -370,7 +370,7 @@ def train_kan_from_pkls(
     lr=1e-3,
     weight_decay=1e-4,
     patience=15,
-    output_dir="data/kan_outputs/merged",
+    output_dir="data/07_kan_runs/merged",
 ):
     class Args:
         pass
@@ -455,7 +455,7 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=15)
 
-    parser.add_argument("--output_dir", default="data/kan_outputs/merged")
+    parser.add_argument("--output_dir", default="data/07_kan_runs/merged")
 
     args = parser.parse_args()
 

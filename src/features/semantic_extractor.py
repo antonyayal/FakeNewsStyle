@@ -34,8 +34,8 @@ from pathlib import Path
 from src.features.semantic_extractor import extract_semantic_features_for_splits
 
 extract_semantic_features_for_splits(
-    input_dir=Path("data/processed_by_model/FakeNewsCorpusSpanish"),
-    output_dir=Path("data/features/semantic/FakeNewsCorpusSpanish"),
+    input_dir=Path("data/02_corpus_clean"),
+    output_dir=Path("data/03_features_raw/semantic"),
     log_dir=Path("logs/features"),
     pooling="attention",  # "mean" | "cls" | "attention"
     max_len=256,

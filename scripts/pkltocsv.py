@@ -15,7 +15,7 @@ env_path = os.environ.get("DATA_PATH")
 pkl_path = (
     Path(env_path)
     if env_path
-    else BASE_DIR / "data" / "processed_by_model" / "FakeNewsCorpusSpanish" / "test.pkl"
+    else BASE_DIR / "data" / "02_corpus_clean" / "test.pkl"
 )
 
 if not pkl_path.exists():

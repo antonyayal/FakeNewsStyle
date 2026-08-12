@@ -1,3 +1,10 @@
+# scripts/peek_pkl_row.py
+# =====================================================
+# Quick peek at a single row of a PKL (columns, text preview,
+# embedding column stats). For deeper inspection across all rows,
+# use scripts/inspect_pkl.py instead.
+# =====================================================
+
 import argparse
 import pickle
 import pandas as pd
@@ -7,12 +14,14 @@ import numpy as np
 # CLI
 # ============================================
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--pkl", required=True, help="Path del PKL")
+parser = argparse.ArgumentParser(description="Peek at a single row of a PKL file")
+parser.add_argument("--pkl", required=True, help="Path to the PKL file")
+parser.add_argument("--row", type=int, default=0, help="Row index to inspect (default: 0)")
 
 args = parser.parse_args()
 
 pkl_path = args.pkl
+row = args.row
 
 # ============================================
 # LOAD
@@ -21,7 +30,7 @@ pkl_path = args.pkl
 with open(pkl_path, "rb") as f:
     data = pickle.load(f)
 
-print(f"\nTipo cargado: {type(data)}")
+print(f"\nLoaded type: {type(data)}")
 
 # ============================================
 # DATAFRAME
@@ -29,11 +38,11 @@ print(f"\nTipo cargado: {type(data)}")
 
 if isinstance(data, pd.DataFrame):
 
-    print("\nColumnas:")
+    print("\nColumns:")
     print(data.columns.tolist())
 
-    print("\nPrimera fila:")
-    print(data.iloc[0])
+    print(f"\nRow {row}:")
+    print(data.iloc[row])
 
     text_cols = [
         "Text",
@@ -46,7 +55,7 @@ if isinstance(data, pd.DataFrame):
     for col in text_cols:
         if col in data.columns:
             print(f"\n===== {col} =====\n")
-            print(data.iloc[0][col])
+            print(data.iloc[row][col])
             break
 
     # ============================================
@@ -78,7 +87,7 @@ if isinstance(data, pd.DataFrame):
             print(f"Global std:  {arr.std():.6f}")
 
             print("\nPrimeras 20 dimensiones:")
-            print(arr[0][:20])
+            print(arr[row][:20])
 
             print("\nRango por dimensión (primeras 20):")
 

@@ -17,7 +17,6 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 from src.data.convert_xlsx_to_pkl import convert_folder_xlsx_to_pkl
-from src.experiments.run_experiment import run_train, run_test, run_train_test
 from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import extract_emotion_features_for_splits
@@ -118,12 +117,6 @@ parser = argparse.ArgumentParser(description="FakeNewsStyle Main Entry Point")
 # ---- corpus
 parser.add_argument("--prepare_corpus", action="store_true")
 
-# ---- run
-parser.add_argument("--mode", type=str, default=None, choices=["train", "test", "train_test"])
-parser.add_argument("--config", type=str, default=None)
-parser.add_argument("--ckpt", type=str, default=None)
-parser.add_argument("--out_dir", type=str, default="./runs")
-
 # ---- preprocess
 parser.add_argument("--preprocess_text", action="store_true")
 parser.add_argument("--preprocess_input_dir", type=str, default=None)
@@ -205,7 +198,7 @@ parser.add_argument("--vae_batch_size", type=int, default=32)
 parser.add_argument("--vae_learning_rate", type=float, default=1e-3)
 parser.add_argument("--vae_beta", type=float, default=1.0)
 parser.add_argument("--vae_dropout", type=float, default=0.1)
-parser.add_argument("--vae_data_output_dir", type=str, default="data/vae_outputs")
+parser.add_argument("--vae_data_output_dir", type=str, default="data/05_vae_latents")
 parser.add_argument("--vae_model_output_dir", type=str, default="models/vae")
 
 # ---- merge VAE latents
@@ -249,8 +242,8 @@ args = parser.parse_args()
 # Paths
 # =====================================================
 RAW_DIR = BASE_DIR / "data" / "raw"
-PROCESSED_DIR = BASE_DIR / "data" / "processed_to_PKL"
-PROCESSED_BY_MODEL_DIR = BASE_DIR / "data" / "processed_by_model"
+PROCESSED_DIR = BASE_DIR / "data" / "01_corpus_pkl"
+PROCESSED_BY_MODEL_DIR = BASE_DIR / "data" / "02_corpus_clean"
 
 LOGS_FEATURES_DIR = BASE_DIR / "logs" / "features"
 LOGS_SEMANTIC_DIR = _ensure_dir(LOGS_FEATURES_DIR / "semantic")
@@ -261,13 +254,13 @@ LOGS_CONTEXT_DIR = _ensure_dir(LOGS_FEATURES_DIR / "context")
 RAW_FEATURES_MERGE_OUTPUT_DIR = (
     Path(args.raw_features_merge_output_dir)
     if args.raw_features_merge_output_dir
-    else BASE_DIR / "data" / "features_merged_for_kan"
+    else BASE_DIR / "data" / "04_features_merged"
 )
 
 VAE_LATENT_MERGE_OUTPUT_DIR = (
     Path(args.merge_output_dir)
     if args.merge_output_dir
-    else BASE_DIR / "data" / "vae_latent_merged"
+    else BASE_DIR / "data" / "06_vae_latents_merged"
 )
 
 
@@ -332,7 +325,7 @@ if args.extract_semantic:
     print("Extracting semantic features (XLM-RoBERTa)")
 
     input_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
-    output_dir = BASE_DIR / "data" / "features" / "semantic"
+    output_dir = BASE_DIR / "data" / "03_features_raw" / "semantic"
 
     extract_semantic_features_for_splits(
         input_dir=input_dir,
@@ -356,7 +349,7 @@ if args.extract_emotion:
     print("Extracting emotion features (pysentimiento)")
 
     emotion_input_dir = _default_input_dir(args.emotion_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    emotion_output_dir = BASE_DIR / "data" / "features" / "emotion"
+    emotion_output_dir = BASE_DIR / "data" / "03_features_raw" / "emotion"
     emotion_output_dir.mkdir(parents=True, exist_ok=True)
 
     emotion_device = _resolve_emotion_device(args.emotion_device)
@@ -385,7 +378,7 @@ if args.extract_style:
     print("Extracting style features (spaCy/textstat/wordfreq)")
 
     style_input_dir = _default_input_dir(args.style_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    style_output_dir = BASE_DIR / "data" / "features" / "style"
+    style_output_dir = BASE_DIR / "data" / "03_features_raw" / "style"
     style_output_dir.mkdir(parents=True, exist_ok=True)
 
     style_extractor = StyleExtractor(
@@ -448,7 +441,7 @@ if args.extract_context:
     print("Extracting context features (Source/Domain/Topic/Age)")
 
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    context_output_dir = BASE_DIR / "data" / "features" / "context"
+    context_output_dir = BASE_DIR / "data" / "03_features_raw" / "context"
     context_output_dir.mkdir(parents=True, exist_ok=True)
 
     ctx_extractor = ContextExtractor(
@@ -535,10 +528,10 @@ if args.merge_raw_features:
     print("Merging raw feature PKLs before VAE")
 
     raw_feature_dirs = {
-        "semantic": BASE_DIR / "data" / "features" / "semantic",
-        "emotion": BASE_DIR / "data" / "features" / "emotion",
-        "style": BASE_DIR / "data" / "features" / "style",
-        "context": BASE_DIR / "data" / "features" / "context",
+        "semantic": BASE_DIR / "data" / "03_features_raw" / "semantic",
+        "emotion": BASE_DIR / "data" / "03_features_raw" / "emotion",
+        "style": BASE_DIR / "data" / "03_features_raw" / "style",
+        "context": BASE_DIR / "data" / "03_features_raw" / "context",
     }
 
     merge_all_splits(
@@ -563,36 +556,36 @@ if args.run_vaes:
             "latent_dim": int(args.semantic_latent_dim),
             "hidden_dims": [512, 256],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "features" / "semantic" / "train_semantic.pkl",
-            "val_pkl": BASE_DIR / "data" / "features" / "semantic" / "val_semantic.pkl",
-            "test_pkl": BASE_DIR / "data" / "features" / "semantic" / "test_semantic.pkl",
+            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "train_semantic.pkl",
+            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "val_semantic.pkl",
+            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "test_semantic.pkl",
         },
         "emotion": {
             "enabled": not args.exclude_emotion,
             "latent_dim": int(args.emotion_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": ["emo_probs", "sent_probs", "signals"],
-            "train_pkl": BASE_DIR / "data" / "features" / "emotion" / "train_emotion.pkl",
-            "val_pkl": BASE_DIR / "data" / "features" / "emotion" / "val_emotion.pkl",
-            "test_pkl": BASE_DIR / "data" / "features" / "emotion" / "test_emotion.pkl",
+            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "train_emotion.pkl",
+            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "val_emotion.pkl",
+            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "test_emotion.pkl",
         },
         "style": {
             "enabled": not args.exclude_style,
             "latent_dim": int(args.style_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "features" / "style" / "train_style.pkl",
-            "val_pkl": BASE_DIR / "data" / "features" / "style" / "val_style.pkl",
-            "test_pkl": BASE_DIR / "data" / "features" / "style" / "test_style.pkl",
+            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "train_style.pkl",
+            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "val_style.pkl",
+            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "test_style.pkl",
         },
         "context": {
             "enabled": not args.exclude_context,
             "latent_dim": int(args.context_latent_dim),
             "hidden_dims": [256, 128],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "features" / "context" / "train_context.pkl",
-            "val_pkl": BASE_DIR / "data" / "features" / "context" / "val_context.pkl",
-            "test_pkl": BASE_DIR / "data" / "features" / "context" / "test_context.pkl",
+            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "train_context.pkl",
+            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "val_context.pkl",
+            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "test_context.pkl",
         },
     }
 
@@ -674,7 +667,7 @@ if args.merge_vae_latents:
     }
 
     latent_dirs = {
-        name: BASE_DIR / "data" / "vae_outputs" / name / f"latent{dim}"
+        name: BASE_DIR / "data" / "05_vae_latents" / name / f"latent{dim}"
         for name, dim in latent_dims.items()
         if use_modality[name]
     }
@@ -778,7 +771,7 @@ if args.train_kan:
     kan_output_dir = (
         Path(args.kan_output_dir)
         if args.kan_output_dir
-        else BASE_DIR / "data" / "kan_outputs" / "merged"
+        else BASE_DIR / "data" / "07_kan_runs" / "merged"
     )
 
     print(f"KAN train PKL: {kan_train_pkl}")
@@ -894,42 +887,3 @@ if args.train_kan:
     )
 else:
     print("KAN training skipped")
-
-
-# =====================================================
-# Main training/testing
-# =====================================================
-def main():
-    print("FakeNewsStyle main initialized")
-
-    if args.mode is None:
-        print("No --mode provided. Exiting.")
-        return
-
-    if args.config is None:
-        raise ValueError("--config is required when using --mode")
-
-    if args.mode == "test" and not args.ckpt:
-        raise ValueError("--ckpt is required when --mode test")
-
-    if args.mode == "train":
-        best_ckpt = run_train(config_path=args.config, out_dir=args.out_dir)
-        print(best_ckpt or "")
-        return
-
-    if args.mode == "test":
-        _ = run_test(config_path=args.config, ckpt_path=args.ckpt, out_dir=args.out_dir)
-        print("Test completed")
-        return
-
-    if args.mode == "train_test":
-        _ = run_train_test(config_path=args.config, out_dir=args.out_dir)
-        print("Train+Test completed")
-        return
-
-
-# =====================================================
-# Entrypoint
-# =====================================================
-if __name__ == "__main__":
-    main()

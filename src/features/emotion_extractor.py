@@ -39,8 +39,8 @@ from pathlib import Path
 from src.features.emotion_extractor import extract_emotion_features_for_splits
 
 extract_emotion_features_for_splits(
-    input_dir=Path("data/processed_by_model/FakeNewsCorpusSpanish"),
-    output_dir=Path("data/features/emotion/FakeNewsCorpusSpanish"),
+    input_dir=Path("data/02_corpus_clean"),
+    output_dir=Path("data/03_features_raw/emotion"),
     log_dir=Path("logs/features"),
     text_col="text_xlmr",
     batch_size=32,

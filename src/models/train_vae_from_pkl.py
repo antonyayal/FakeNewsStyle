@@ -341,7 +341,7 @@ def train_vae_from_paths(
     epochs=100,
     batch_size=32,
     learning_rate=1e-3,
-    output_data_dir="data/vae_outputs",
+    output_data_dir="data/05_vae_latents",
     output_model_dir="models/vae",
     feature_name="feature",
 ):
@@ -499,7 +499,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
 
-    parser.add_argument("--output_data_dir", default="data/vae_outputs")
+    parser.add_argument("--output_data_dir", default="data/05_vae_latents")
     parser.add_argument("--output_model_dir", default="models/vae")
 
     args = parser.parse_args()
