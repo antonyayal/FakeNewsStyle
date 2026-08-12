@@ -25,8 +25,8 @@ from src.features.context_extractor import ContextExtractor, ContextExtractorCon
 from src.features.merge_raw_features_for_kan import merge_all_splits
 from src.models.train_vae_from_pkl import train_vae_from_paths
 from src.models.kan import train_kan_from_pkls
-from src.experiments.run_logger import log_experiment_result, MODALITY_ORDER
-from src.evaluation.metrics import evaluate_binary_classifier, save_metrics
+from src.experiments.run_logger import log_experiment_result, hash_files, MODALITY_ORDER
+from src.evaluation.metrics import evaluate_binary_classifier, save_metrics, compute_topic_breakdown
 
 try:
     import torch  # type: ignore
@@ -249,6 +249,14 @@ parser.add_argument("--kan_batch_size", type=int, default=32)
 parser.add_argument("--kan_lr", type=float, default=1e-3)
 parser.add_argument("--kan_weight_decay", type=float, default=1e-4)
 parser.add_argument("--kan_patience", type=int, default=15)
+parser.add_argument("--kan_seed", type=int, default=42)
+parser.add_argument(
+    "--kan_test_corpus_pkl",
+    type=str,
+    default=None,
+    help="Corpus PKL (with a Topic column) positionally aligned with the KAN test split, "
+    "used to compute a per-Topic accuracy/F1 breakdown. Defaults to preprocess_output_dir/test.pkl.",
+)
 
 args = parser.parse_args()
 
@@ -813,6 +821,7 @@ if args.train_kan:
         weight_decay=float(args.kan_weight_decay),
         patience=int(args.kan_patience),
         output_dir=str(kan_output_dir),
+        seed=int(args.kan_seed),
     )
 
     print("KAN training completed")
@@ -856,6 +865,32 @@ if args.train_kan:
 
     print(f"All metrics saved in: {kan_output_dir}")
 
+    dataset_hash = hash_files([kan_train_pkl, kan_val_pkl, kan_test_pkl])
+    print(f"Dataset hash (train+val+test PKLs): {dataset_hash}")
+
+    # Per-Topic breakdown for the test split: positionally joins test predictions
+    # with the Topic column of the corpus PKL that fed this run's feature
+    # extraction. Assumes row order was never reshuffled between corpus_clean
+    # and the merged KAN input (true for every path this pipeline currently
+    # supports); returns None (and is stored as such) if the corpus PKL is
+    # missing, lacks Topic, or its row count doesn't match the test split.
+    test_corpus_pkl = (
+        Path(args.kan_test_corpus_pkl)
+        if args.kan_test_corpus_pkl
+        else PROCESSED_BY_MODEL_DIR / "test.pkl"
+    )
+    topic_breakdown = None
+    if test_corpus_pkl.exists():
+        test_corpus_df = pd.read_pickle(test_corpus_pkl)
+        if "Topic" in test_corpus_df.columns:
+            topic_breakdown = compute_topic_breakdown(
+                y_true=np.asarray(preds["test"]["y_true"]),
+                y_prob=np.asarray(preds["test"]["y_prob"]),
+                topics=test_corpus_df["Topic"].tolist(),
+            )
+    if topic_breakdown is None:
+        print(f"Topic breakdown skipped (no usable Topic column at {test_corpus_pkl})")
+
     # ---- experiment logging (results/) ----
     use_modality = {
         "semantic": not args.exclude_semantic,
@@ -897,12 +932,17 @@ if args.train_kan:
             "lr": float(args.kan_lr),
             "weight_decay": float(args.kan_weight_decay),
             "patience": int(args.kan_patience),
+            "seed": int(args.kan_seed),
         },
         metrics=all_metrics,
         kan_output_dir=kan_output_dir,
         kan_checkpoint_path=Path(kan_result["best_model_path"]),
         vae_model_dirs=vae_model_dirs,
         base_dir=BASE_DIR,
+        training_time_seconds=kan_result.get("training_time_seconds"),
+        num_parameters=kan_result.get("num_parameters"),
+        dataset_hash=dataset_hash,
+        topic_breakdown=topic_breakdown,
     )
 else:
     print("KAN training skipped")

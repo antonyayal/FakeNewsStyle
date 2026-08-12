@@ -123,6 +123,46 @@ def evaluate_binary_classifier(
     return metrics
 
 
+def compute_topic_breakdown(y_true, y_prob, topics, threshold: float = 0.5) -> dict | None:
+    """
+    Per-Topic accuracy/F1 breakdown for a single split, to check whether the
+    model depends on topics over-represented in train.
+
+    Assumes y_true/y_prob and topics are already positionally aligned (same
+    row order as the corpus PKL the predictions were made on) -- callers are
+    responsible for that alignment; this function does not join by Id.
+    Returns None if topics is empty/None or lengths don't match, so callers
+    can store a null topic_breakdown rather than fail the whole run.
+    """
+    if topics is None:
+        return None
+
+    y_true = np.asarray(y_true)
+    y_prob = np.asarray(y_prob)
+    topics = np.asarray(topics)
+
+    if len(topics) != len(y_true):
+        return None
+
+    y_pred = (y_prob >= threshold).astype(int)
+
+    breakdown = {}
+    for topic in sorted(set(topics.tolist())):
+        mask = topics == topic
+        n = int(mask.sum())
+        if n == 0:
+            continue
+
+        yt, yp = y_true[mask], y_pred[mask]
+        breakdown[str(topic)] = {
+            "n": n,
+            "accuracy": float(accuracy_score(yt, yp)),
+            "f1": float(f1_score(yt, yp, zero_division=0)),
+        }
+
+    return breakdown or None
+
+
 def save_metrics(metrics: dict, output_dir: str | Path, prefix: str = "metrics"):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

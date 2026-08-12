@@ -1,0 +1,22 @@
+{
+    "threshold": 0.5,
+    "accuracy": 0.5186440677966102,
+    "balanced_accuracy": 0.5,
+    "precision": 0.0,
+    "recall": 0.0,
+    "specificity": 1.0,
+    "f1": 0.0,
+    "roc_auc": 0.5466721900027617,
+    "pr_auc": 0.5235750354290998,
+    "log_loss": 0.6923902988918738,
+    "brier_score": 0.24962165133004166,
+    "ece": 0.0060663264686778295,
+    "entropy_mean": 0.6928292342544723,
+    "entropy_std": 4.3656666342505435e-05,
+    "tn": 153,
+    "fp": 0,
+    "fn": 142,
+    "tp": 0,
+    "false_positive_rate": 0.0,
+    "false_negative_rate": 1.0
+}

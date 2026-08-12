@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +15,16 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
+
+
+def set_seed(seed: int) -> None:
+    """Seeds every RNG that affects KAN training: weight init, dropout masks,
+    and DataLoader shuffling (all draw from torch's global RNG)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # =========================================================
@@ -192,6 +204,8 @@ def predict_proba(model, loader, device):
 # Training
 # =========================================================
 def run_training(args):
+    set_seed(int(getattr(args, "seed", 42)))
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -235,6 +249,9 @@ def run_training(args):
         dropout=args.dropout,
     ).to(device)
 
+    num_parameters = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {num_parameters}")
+
     criterion = nn.BCEWithLogitsLoss()
 
     optimizer = torch.optim.AdamW(
@@ -246,6 +263,8 @@ def run_training(args):
     best_val_loss = float("inf")
     bad_epochs = 0
     best_path = output_dir / "best_kan_model.pt"
+
+    training_start = time.time()
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -302,6 +321,7 @@ def run_training(args):
                     "scaler_mean": scaler.mean_,
                     "scaler_scale": scaler.scale_,
                     "label_standard": "1=Fake, 0=True/Real",
+                    "seed": int(getattr(args, "seed", 42)),
                 },
                 best_path,
             )
@@ -312,6 +332,9 @@ def run_training(args):
         if bad_epochs >= args.patience:
             print("Early stopping triggered.")
             break
+
+    training_time_seconds = time.time() - training_start
+    print(f"Training time: {training_time_seconds:.1f}s")
 
     checkpoint = torch.load(best_path, map_location=device, weights_only=False)
 
@@ -350,6 +373,8 @@ def run_training(args):
         "predictions": predictions,
         "epochs_run": epoch,
         "best_val_loss": best_val_loss,
+        "training_time_seconds": training_time_seconds,
+        "num_parameters": num_parameters,
     }
 
 
@@ -371,6 +396,7 @@ def train_kan_from_pkls(
     weight_decay=1e-4,
     patience=15,
     output_dir="data/07_kan_runs/merged",
+    seed=42,
 ):
     class Args:
         pass
@@ -395,6 +421,7 @@ def train_kan_from_pkls(
     args.patience = patience
 
     args.output_dir = output_dir
+    args.seed = seed
 
     return run_training(args)
 
@@ -454,6 +481,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--output_dir", default="data/07_kan_runs/merged")
 

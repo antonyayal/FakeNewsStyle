@@ -8,6 +8,7 @@ scripts/report_builder.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -20,6 +21,22 @@ from typing import Any, Dict, List, Optional
 # main.py Step 9 (VAE latent merge) so weight-slicing in report_builder.py
 # lines up with the columns actually fed into the KAN classifier.
 MODALITY_ORDER = ["semantic", "emotion", "style", "context"]
+
+
+def hash_files(paths: List[Path], algo: str = "md5") -> Optional[str]:
+    """
+    Combined hash of a set of files (e.g. the exact train/val/test PKLs fed
+    into a KAN run), so two runs can be checked for having used identical
+    data regardless of which corpus variant/split produced it. Returns None
+    if any path is missing rather than raising, since this is best-effort
+    traceability, not a required part of a run succeeding.
+    """
+    hasher = hashlib.new(algo)
+    for path in sorted(Path(p) for p in paths):
+        if not path.exists():
+            return None
+        hasher.update(path.read_bytes())
+    return hasher.hexdigest()
 
 
 def _get_git_commit_hash(repo_dir: Path) -> Optional[str]:
@@ -52,6 +69,10 @@ def log_experiment_result(
     vae_model_dirs: Dict[str, Path],
     base_dir: Path,
     results_dir: Optional[Path] = None,
+    training_time_seconds: Optional[float] = None,
+    num_parameters: Optional[int] = None,
+    dataset_hash: Optional[str] = None,
+    topic_breakdown: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Path:
     """
     Assembles one experiment record and writes it to results/{run_id}.json.
@@ -94,6 +115,12 @@ def log_experiment_result(
         "vae_hyperparams": vae_hyperparams,
         "kan_hyperparams": kan_hyperparams,
         "metrics": metrics,
+        "compute": {
+            "training_time_seconds": training_time_seconds,
+            "num_parameters": num_parameters,
+        },
+        "dataset_hash": dataset_hash,
+        "topic_breakdown": topic_breakdown,
         "paths": {
             "kan_output_dir": str(kan_output_dir),
             "kan_checkpoint": str(kan_checkpoint_path),

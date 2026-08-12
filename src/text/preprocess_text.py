@@ -12,7 +12,7 @@ The goal is to:
 Outputs (per split PKL):
 - text_raw   : Headline + "\n\n" + Text
 - text_xlmr  : cleaned text safe for XLM-R tokenizer
-- label      : copied from Category
+- label      : homologated from Category to canonical strings "Fake" / "True"
 """
 
 import logging
@@ -38,6 +38,41 @@ RE_CONTROL_CHARS = re.compile(r"[\u0000-\u001F\u007F-\u009F\u200B\u200C\u200D\uF
 RE_MULTISPACE = re.compile(r"\s+")
 RE_URL = re.compile(r"(https?://\S+|www\.\S+)", flags=re.IGNORECASE)
 RE_EMAIL = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b", flags=re.IGNORECASE)
+
+
+# =====================================================
+# Label homologation
+# =====================================================
+FAKE_STR_VALUES = {"fake", "false", "falsa", "0"}
+REAL_STR_VALUES = {"true", "real", "verdadera", "1"}
+
+
+def normalize_label_value(value) -> str:
+    """
+    Homologates any raw Category value to a canonical string: "Fake" or "True".
+
+    The raw xlsx corpus mixes representations for the same two classes
+    depending on how each cell was typed in Excel: text ("Fake"/"True")
+    in most rows, but literal booleans (True/False) in others -- e.g.
+    data/01_corpus_pkl/test.pkl is entirely bool, train.pkl mixes both.
+    Mirrors the same True=real/False=fake semantics already assumed by
+    src/models/kan.py's normalize_labels(), so every downstream PKL
+    (feature extractors, VAE latents, KAN input) reads one homologated
+    dtype instead of re-deriving this mapping ad hoc.
+    """
+    if isinstance(value, bool):
+        return "True" if value else "Fake"
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "Fake" if int(value) == 1 else "True"
+
+    text = str(value).strip().lower()
+    if text in FAKE_STR_VALUES:
+        return "Fake"
+    if text in REAL_STR_VALUES:
+        return "True"
+
+    raise ValueError(f"Unrecognized label value: {value!r} (type={type(value).__name__})")
 
 
 # =====================================================
@@ -135,7 +170,9 @@ def preprocess_pkl_for_model(
     Creates:
     - text_raw   : Headline + Text
     - text_xlmr  : cleaned text for XLM-R tokenizer
-    - label      : copied from Category
+    - label      : homologated from Category to canonical strings "Fake" / "True"
+                   (see normalize_label_value -- the raw xlsx mixes text and
+                   literal-boolean representations of the same two classes)
 
     Original columns are preserved.
     """
@@ -155,12 +192,14 @@ def preprocess_pkl_for_model(
     out_df = df.copy()
     out_df["text_raw"] = text_raw
     out_df["text_xlmr"] = text_xlmr
-    out_df["label"] = df[label_col]
+    out_df["label"] = df[label_col].apply(normalize_label_value)
 
     output_pkl.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_pickle(output_pkl)
 
     if logger is not None:
+        label_counts = out_df["label"].value_counts().to_dict()
+        logger.info(f"Label homologated (Category -> label): {label_counts}")
         logger.info(f"PKL created: {output_pkl}")
 
     return output_pkl
