@@ -252,13 +252,36 @@ header.report-header .meta span { margin-right: 22px; }
 .narrative li { margin-bottom: 6px; font-size: 0.92rem; }
 .narrative .warn-item { color: var(--warn); }
 table.summary {
-  width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden;
+  width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px;
   font-size: 0.88rem;
 }
 table.summary th, table.summary td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-table.summary th { background: var(--panel-alt); cursor: pointer; user-select: none; white-space: nowrap; }
+table.summary th { background: var(--panel-alt); cursor: pointer; user-select: none; white-space: nowrap; position: relative; }
 table.summary th:hover { color: var(--accent); }
 table.summary th .arrow { opacity: 0.5; font-size: 0.75em; margin-left: 4px; }
+table.summary th[data-tooltip] { cursor: help; }
+table.summary th[data-tooltip]::after {
+  content: attr(data-tooltip);
+  /* Positioned *below* the header, not above: the table sits inside a div with
+     overflow-x:auto, and per the CSS spec that makes the browser treat overflow-y
+     as auto too -- anything placed above the th (bottom:100%) falls outside that
+     box and gets silently clipped. Below the header stays within the div's own
+     height (the table body), so it isn't clipped. */
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%) translateY(8px);
+  background: #0b0e16; color: var(--text); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 8px 12px; font-size: 0.8rem; font-weight: 400; white-space: normal; text-align: left;
+  width: max-content; max-width: 260px; line-height: 1.4;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4); z-index: 20;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.12s ease;
+}
+table.summary th[data-tooltip]::before {
+  content: ''; position: absolute; left: 50%; top: 100%;
+  transform: translateX(-50%) translateY(2px);
+  border: 6px solid transparent; border-bottom-color: var(--accent);
+  opacity: 0; visibility: hidden; transition: opacity 0.12s ease; z-index: 20;
+}
+table.summary th[data-tooltip]:hover::after,
+table.summary th[data-tooltip]:hover::before { opacity: 1; visibility: visible; }
 table.summary tbody tr:hover { background: #1c2333; }
 .epoch-early { color: var(--warn); font-weight: 600; }
 .epoch-early::after { content: " (early stop)"; font-weight: 400; font-size: 0.85em; opacity: 0.85; }
@@ -418,18 +441,30 @@ function renderNarrative() {
 // ---------- Summary table ----------
 let gapThreshold = 0.15;
 const TABLE_COLUMNS = [
-  { key: 'run_id', label: 'run_id', sort: (r) => r.run_id },
-  { key: 'timestamp', label: 'Fecha/hora', sort: (r) => r.timestamp },
-  { key: 'combo', label: 'Extractores activos', sort: (r) => r.combo },
-  { key: 'epochs', label: 'Épocas KAN (run/pedidas)', sort: (r) => r.epochs.kan_epochs_run },
-  { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy },
-  { key: 'gap', label: 'Gap (train−test)', sort: (r) => overfitGap(r) },
-  { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1 },
-  { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc },
-  { key: 'seed', label: 'Seed', sort: (r) => r.seed },
-  { key: 'training_time', label: 'Tiempo entren. (s)', sort: (r) => r.training_time_seconds },
-  { key: 'num_parameters', label: '# Parámetros', sort: (r) => r.num_parameters },
-  { key: 'batch', label: 'Lote', sort: (r) => r.batch_label || '' },
+  { key: 'run_id', label: 'run_id', sort: (r) => r.run_id,
+    tip: 'Identificador único de la corrida (timestamp + hash corto).' },
+  { key: 'timestamp', label: 'Fecha/hora', sort: (r) => r.timestamp,
+    tip: 'Fecha y hora en que terminó el entrenamiento de esta corrida.' },
+  { key: 'combo', label: 'Extractores activos', sort: (r) => r.combo,
+    tip: 'Qué ramas de features (semantic / emotion / style / context) alimentaron al KAN en esta corrida.' },
+  { key: 'epochs', label: 'Épocas KAN (run/pedidas)', sort: (r) => r.epochs.kan_epochs_run,
+    tip: 'Épocas que realmente corrió el KAN vs. las que se pidieron. Si son distintas, se activó el early stopping.' },
+  { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
+    tip: 'Accuracy sobre el split de test (datos nunca vistos durante el entrenamiento).' },
+  { key: 'gap', label: 'Gap (train−test)', sort: (r) => overfitGap(r),
+    tip: 'Accuracy de train menos accuracy de test. Un gap grande indica sobreajuste: el modelo memorizó el train y generaliza mal.' },
+  { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
+    tip: 'F1-score de la clase Fake en test (media armónica de precision y recall).' },
+  { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc,
+    tip: 'Área bajo la curva ROC en test: qué tan bien separa el modelo Fake de True, para cualquier umbral.' },
+  { key: 'seed', label: 'Seed', sort: (r) => r.seed,
+    tip: 'Semilla aleatoria del entrenamiento del KAN. Corridas idénticas con distinta seed muestran cuánta varianza hay por puro azar de inicialización.' },
+  { key: 'training_time', label: 'Tiempo entren. (s)', sort: (r) => r.training_time_seconds,
+    tip: 'Tiempo de entrenamiento del KAN en segundos (no incluye extracción de features ni entrenamiento de VAEs).' },
+  { key: 'num_parameters', label: '# Parámetros', sort: (r) => r.num_parameters,
+    tip: 'Número total de parámetros entrenables del clasificador KAN: indica su capacidad/tamaño.' },
+  { key: 'batch', label: 'Lote', sort: (r) => r.batch_label || '',
+    tip: 'Lote de scripts/run_experiments.py (o similar) al que pertenece esta corrida, y su fase dentro del plan.' },
 ];
 
 let sortState = { key: 'timestamp', asc: true };
@@ -462,7 +497,8 @@ function renderTable() {
   const theadRow = document.getElementById('table-head-row');
   theadRow.innerHTML = TABLE_COLUMNS.map(c => {
     const arrow = sortState.key === c.key ? (sortState.asc ? '▲' : '▼') : '';
-    return `<th data-key="${c.key}">${c.label}<span class="arrow">${arrow}</span></th>`;
+    const tipAttr = c.tip ? ` data-tooltip="${c.tip.replace(/"/g, '&quot;')}"` : '';
+    return `<th data-key="${c.key}"${tipAttr}>${c.label}<span class="arrow">${arrow}</span></th>`;
   }).join('');
   theadRow.querySelectorAll('th').forEach(th => {
     th.addEventListener('click', () => {

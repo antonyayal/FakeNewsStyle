@@ -1,0 +1,184 @@
+{
+  "run_id": "20260812_020552_966232ea",
+  "timestamp": "2026-08-12T02:05:52-06:00",
+  "git_commit": "c87f872e5397f4f658600e9b102406afc7d71fb3",
+  "active_extractors": [
+    "emotion",
+    "style"
+  ],
+  "excluded_extractors": [
+    "semantic",
+    "context"
+  ],
+  "latent_dims": {
+    "semantic": 128,
+    "emotion": 16,
+    "style": 16,
+    "context": 64
+  },
+  "epochs": {
+    "vae_epochs_requested": 100,
+    "kan_epochs_requested": 50,
+    "kan_epochs_run": 15
+  },
+  "vae_hyperparams": {
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "beta": 1.0,
+    "dropout": 0.1
+  },
+  "kan_hyperparams": {
+    "hidden_dim": 32,
+    "num_basis": 8,
+    "dropout": 0.5,
+    "batch_size": 32,
+    "lr": 0.001,
+    "weight_decay": 0.001,
+    "patience": 5,
+    "seed": 42
+  },
+  "metrics": {
+    "train": {
+      "threshold": 0.5,
+      "accuracy": 0.7944199706314243,
+      "balanced_accuracy": 0.7943873238221747,
+      "precision": 0.7946428571428571,
+      "recall": 0.7899408284023669,
+      "specificity": 0.7988338192419825,
+      "f1": 0.7922848664688428,
+      "roc_auc": 0.855400486483689,
+      "pr_auc": 0.8503136891168326,
+      "log_loss": 0.509807933730868,
+      "brier_score": 0.16423898726840877,
+      "ece": 0.1114183770883801,
+      "entropy_mean": 0.6045327431291739,
+      "entropy_std": 0.05364637577463421,
+      "tn": 274,
+      "fp": 69,
+      "fn": 71,
+      "tp": 267,
+      "false_positive_rate": 0.20116618075801748,
+      "false_negative_rate": 0.21005917159763313
+    },
+    "val": {
+      "threshold": 0.5,
+      "accuracy": 0.7389830508474576,
+      "balanced_accuracy": 0.7389685603971319,
+      "precision": 0.7397260273972602,
+      "recall": 0.7346938775510204,
+      "specificity": 0.7432432432432432,
+      "f1": 0.7372013651877133,
+      "roc_auc": 0.8088803088803089,
+      "pr_auc": 0.787509040462933,
+      "log_loss": 0.5490258183362845,
+      "brier_score": 0.1823323123972815,
+      "ece": 0.0929136676303411,
+      "entropy_mean": 0.6090867410448404,
+      "entropy_std": 0.05440021071000463,
+      "tn": 110,
+      "fp": 38,
+      "fn": 39,
+      "tp": 108,
+      "false_positive_rate": 0.25675675675675674,
+      "false_negative_rate": 0.2653061224489796
+    },
+    "test": {
+      "threshold": 0.5,
+      "accuracy": 0.722027972027972,
+      "balanced_accuracy": 0.7218323205399391,
+      "precision": 0.7262773722627737,
+      "recall": 0.7031802120141343,
+      "specificity": 0.740484429065744,
+      "f1": 0.7145421903052065,
+      "roc_auc": 0.78889065499407,
+      "pr_auc": 0.7737677415314401,
+      "log_loss": 0.5653294363845573,
+      "brier_score": 0.18985990885615167,
+      "ece": 0.04622722826116565,
+      "entropy_mean": 0.6092630783860042,
+      "entropy_std": 0.055066500046933316,
+      "tn": 214,
+      "fp": 75,
+      "fn": 84,
+      "tp": 199,
+      "false_positive_rate": 0.25951557093425603,
+      "false_negative_rate": 0.2968197879858657
+    }
+  },
+  "compute": {
+    "training_time_seconds": 1.0341994762420654,
+    "num_parameters": 12451
+  },
+  "dataset_hash": "d9c4f77bd24ca7cdf6b69b1b9bedf166",
+  "topic_breakdown": {
+    "Covid-19": {
+      "n": 90,
+      "accuracy": 0.5888888888888889,
+      "f1": 0.5842696629213483
+    },
+    "Economy": {
+      "n": 16,
+      "accuracy": 0.8125,
+      "f1": 0.7272727272727273
+    },
+    "Education": {
+      "n": 8,
+      "accuracy": 0.75,
+      "f1": 0.75
+    },
+    "Entertainment": {
+      "n": 55,
+      "accuracy": 0.6181818181818182,
+      "f1": 0.676923076923077
+    },
+    "Environment": {
+      "n": 2,
+      "accuracy": 0.0,
+      "f1": 0.0
+    },
+    "Health": {
+      "n": 18,
+      "accuracy": 0.7222222222222222,
+      "f1": 0.7058823529411765
+    },
+    "International": {
+      "n": 6,
+      "accuracy": 0.6666666666666666,
+      "f1": 0.6666666666666666
+    },
+    "Politics": {
+      "n": 158,
+      "accuracy": 0.7911392405063291,
+      "f1": 0.7659574468085106
+    },
+    "Science": {
+      "n": 37,
+      "accuracy": 0.7567567567567568,
+      "f1": 0.7428571428571429
+    },
+    "Security": {
+      "n": 15,
+      "accuracy": 0.9333333333333333,
+      "f1": 0.9473684210526315
+    },
+    "Society": {
+      "n": 121,
+      "accuracy": 0.7272727272727273,
+      "f1": 0.7272727272727273
+    },
+    "Sport": {
+      "n": 46,
+      "accuracy": 0.7608695652173914,
+      "f1": 0.7441860465116279
+    }
+  },
+  "paths": {
+    "kan_output_dir": "data/07_kan_runs/combosweep_emotion_style",
+    "kan_checkpoint": "data/07_kan_runs/combosweep_emotion_style/best_kan_model.pt",
+    "kan_checkpoint_snapshot": "/home/antonio/Projects/FakeNewsStyle/results/checkpoints/20260812_020552_966232ea_best_kan_model.pt",
+    "vae_model_dirs": {
+      "emotion": "/home/antonio/Projects/FakeNewsStyle/models/vae/emotion/latent16",
+      "style": "/home/antonio/Projects/FakeNewsStyle/models/vae/style/latent16"
+    }
+  }
+}
