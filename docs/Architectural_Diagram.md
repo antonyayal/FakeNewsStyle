@@ -1,10 +1,11 @@
 Input text + metadata
         │
         ▼
-┌────────────────────────────────────┐
-│         Preprocessing stage        │
-│  XLSX → PKL → text preprocessing   │
-└────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                 Corpus preparation                 │
+│  data/raw/*.xlsx → 01_corpus_pkl → 02_corpus_clean  │
+│           (text preprocessing for XLM-R)            │
+└───────────────────────────────────────────────────┘
         │
         ▼
 ┌───────────────┬───────────────┬───────────────┬───────────────┐
@@ -13,22 +14,27 @@ Input text + metadata
 └──────┬────────┴──────┬────────┴──────┬────────┴──────┬────────┘
        │               │               │               │
        ▼               ▼               ▼               ▼
-   sem_emb         emotion vec      style vec      context vec
-   (1024)             (~23)           (~35)          (103)
+   sem_emb        emo/sent_probs    style dict      context dict
+   (~1024)          + signals        payload          payload
+                      (~23)            (~35)           (~103)
        │               │               │               │
        ▼               ▼               ▼               ▼
    VAE_sem          VAE_emo         VAE_sty         VAE_ctx
-    z=96             z=12            z=16            z=32
+  z=128 (default)  z=16 (default)  z=16 (default)  z=64 (default)
        │               │               │               │
-       ▼               ▼               ▼               ▼
- h_sem (16)       h_emo (16)      h_sty (16)      h_ctx (16)
-       └───────────────┬───────────────┬───────────────┘
-                       ▼
-             Concatenated shared latent
-                       (64 dims)
-                       │
-                       ▼
-              KAN / downstream classifier
-                       │
-                       ▼
-                 Fake / Real prediction
+       └───────────────┴───────┬───────┴───────────────┘
+                                ▼
+                  Direct concatenation (no shared
+                   projection stage — raw VAE latents,
+                    prefixed {branch}_latent_i)
+                     224 dims total (with defaults)
+                                │
+                                ▼
+                    KAN classifier (PyTorch)
+                  RBF-basis KANLayer ×2 → Linear(1)
+                                │
+                                ▼
+                   Fake (1) / True-Real (0) prediction
+                                │
+                                ▼
+                results/{run_id}.json experiment record
