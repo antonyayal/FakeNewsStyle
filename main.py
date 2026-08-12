@@ -115,7 +115,7 @@ def _resolve_emotion_device(requested: str) -> str:
 parser = argparse.ArgumentParser(description="FakeNewsStyle Main Entry Point")
 
 # ---- corpus
-parser.add_argument("--prepare_corpus", type=int, default=0)
+parser.add_argument("--prepare_corpus", action="store_true")
 
 # ---- run
 parser.add_argument("--mode", type=str, default=None, choices=["train", "test", "train_test"])
@@ -124,41 +124,41 @@ parser.add_argument("--ckpt", type=str, default=None)
 parser.add_argument("--out_dir", type=str, default="./runs")
 
 # ---- preprocess
-parser.add_argument("--preprocess_text", type=int, default=0)
+parser.add_argument("--preprocess_text", action="store_true")
 parser.add_argument("--preprocess_input_dir", type=str, default=None)
 parser.add_argument("--preprocess_output_dir", type=str, default=None)
 parser.add_argument("--log_dir", type=str, default="logs/preprocess")
 
 # ---- semantic
-parser.add_argument("--extract_semantic", type=int, default=0)
+parser.add_argument("--extract_semantic", action="store_true")
 parser.add_argument("--semantic_pooling", type=str, default="mean", choices=["mean", "cls", "attention"])
 parser.add_argument("--semantic_device", type=str, default="cpu")
 
 # ---- emotion
-parser.add_argument("--extract_emotion", type=int, default=0)
+parser.add_argument("--extract_emotion", action="store_true")
 parser.add_argument("--emotion_device", type=str, default="cpu")
 parser.add_argument("--emotion_batch_size", type=int, default=32)
-parser.add_argument("--emotion_use_preprocess_tweet", type=int, default=0)
+parser.add_argument("--emotion_use_preprocess_tweet", action="store_true")
 parser.add_argument("--emotion_input_dir", type=str, default=None)
 parser.add_argument("--emotion_text_column", type=str, default="Text")
 parser.add_argument("--emotion_id_column", type=str, default="Id")
 
 # ---- style
-parser.add_argument("--extract_style", type=int, default=0)
+parser.add_argument("--extract_style", action="store_true")
 parser.add_argument("--style_input_dir", type=str, default=None)
 parser.add_argument("--style_text_column", type=str, default="Text")
 parser.add_argument("--style_id_column", type=str, default="Id")
 parser.add_argument("--style_spacy_model", type=str, default="es_core_news_sm")
 parser.add_argument("--style_batch_size", type=int, default=64)
-parser.add_argument("--style_no_readability", type=int, default=0)
-parser.add_argument("--style_no_formality", type=int, default=0)
-parser.add_argument("--style_no_oov", type=int, default=0)
-parser.add_argument("--style_no_diversity", type=int, default=0)
-parser.add_argument("--style_no_extra_signals", type=int, default=0)
+parser.add_argument("--style_no_readability", action="store_true")
+parser.add_argument("--style_no_formality", action="store_true")
+parser.add_argument("--style_no_oov", action="store_true")
+parser.add_argument("--style_no_diversity", action="store_true")
+parser.add_argument("--style_no_extra_signals", action="store_true")
 parser.add_argument("--style_oov_zipf_threshold", type=float, default=1.5)
 
 # ---- context
-parser.add_argument("--extract_context", type=int, default=0)
+parser.add_argument("--extract_context", action="store_true")
 parser.add_argument("--context_input_dir", type=str, default=None)
 parser.add_argument("--context_topic_column", type=str, default="Topic")
 parser.add_argument("--context_source_column", type=str, default="Source")
@@ -171,13 +171,12 @@ parser.add_argument("--context_domain_dim", type=int, default=32)
 parser.add_argument("--context_topic_dim", type=int, default=16)
 parser.add_argument("--context_author_dim", type=int, default=16)
 parser.add_argument("--context_n_hashes", type=int, default=2)
-parser.add_argument("--context_unsigned", type=int, default=0)
+parser.add_argument("--context_unsigned", action="store_true")
 
 # ---- merge raw features before VAE
 parser.add_argument(
     "--merge_raw_features",
-    type=int,
-    default=0,
+    action="store_true",
     help="Merge semantic/emotion/style/context raw features before VAE",
 )
 parser.add_argument(
@@ -188,11 +187,17 @@ parser.add_argument(
 )
 
 # ---- VAE latent extraction
-parser.add_argument("--run_vaes", type=int, default=0)
+parser.add_argument("--run_vaes", action="store_true")
 parser.add_argument("--semantic_latent_dim", type=int, default=128)
 parser.add_argument("--emotion_latent_dim", type=int, default=16)
 parser.add_argument("--style_latent_dim", type=int, default=16)
 parser.add_argument("--context_latent_dim", type=int, default=64)
+
+# ---- modality exclusion (opt out of a feature type in VAE training and latent merge)
+parser.add_argument("--exclude_semantic", action="store_true", help="Exclude semantic features from VAE training and latent merge")
+parser.add_argument("--exclude_emotion", action="store_true", help="Exclude emotion features from VAE training and latent merge")
+parser.add_argument("--exclude_style", action="store_true", help="Exclude style features from VAE training and latent merge")
+parser.add_argument("--exclude_context", action="store_true", help="Exclude context features from VAE training and latent merge")
 
 parser.add_argument("--vae_epochs", type=int, default=100)
 parser.add_argument("--vae_batch_size", type=int, default=32)
@@ -205,8 +210,7 @@ parser.add_argument("--vae_model_output_dir", type=str, default="models/vae")
 # ---- merge VAE latents
 parser.add_argument(
     "--merge_vae_latents",
-    type=int,
-    default=0,
+    action="store_true",
     help="Merge VAE latent PKLs into one KAN-ready dataset",
 )
 parser.add_argument(
@@ -219,8 +223,7 @@ parser.add_argument(
 # ---- KAN classifier
 parser.add_argument(
     "--train_kan",
-    type=int,
-    default=0,
+    action="store_true",
     help="Train KAN classifier using merged PKLs",
 )
 parser.add_argument("--kan_train_pkl", type=str, default=None)
@@ -270,7 +273,7 @@ VAE_LATENT_MERGE_OUTPUT_DIR = (
 # =====================================================
 # Step 1: Prepare corpus
 # =====================================================
-if args.prepare_corpus == 1:
+if args.prepare_corpus:
     from datetime import datetime
 
     log_dir_step1 = _ensure_dir(BASE_DIR / "logs" / "prepare_corpus")
@@ -309,7 +312,7 @@ else:
 # =====================================================
 # Step 2: Preprocess text
 # =====================================================
-if args.preprocess_text == 1:
+if args.preprocess_text:
     input_dir = Path(args.preprocess_input_dir) if args.preprocess_input_dir else PROCESSED_DIR
     output_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
     log_dir = BASE_DIR / args.log_dir
@@ -324,7 +327,7 @@ else:
 # =====================================================
 # Step 3: Semantic features
 # =====================================================
-if args.extract_semantic == 1:
+if args.extract_semantic:
     print("Extracting semantic features (XLM-RoBERTa)")
 
     input_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
@@ -348,7 +351,7 @@ else:
 # =====================================================
 # Step 4: Emotion features
 # =====================================================
-if args.extract_emotion == 1:
+if args.extract_emotion:
     print("Extracting emotion features (pysentimiento)")
 
     emotion_input_dir = _default_input_dir(args.emotion_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
@@ -364,7 +367,7 @@ if args.extract_emotion == 1:
         text_col=args.emotion_text_column,
         batch_size=int(args.emotion_batch_size),
         device=emotion_device,
-        use_preprocess_tweet=(args.emotion_use_preprocess_tweet == 1),
+        use_preprocess_tweet=args.emotion_use_preprocess_tweet,
         normalize_signals_by="chars",
         extra_signals=True,
     )
@@ -377,7 +380,7 @@ else:
 # =====================================================
 # Step 5: Style features
 # =====================================================
-if args.extract_style == 1:
+if args.extract_style:
     print("Extracting style features (spaCy/textstat/wordfreq)")
 
     style_input_dir = _default_input_dir(args.style_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
@@ -387,11 +390,11 @@ if args.extract_style == 1:
     style_extractor = StyleExtractor(
         StyleExtractorConfig(
             spacy_model=args.style_spacy_model,
-            compute_readability=(args.style_no_readability == 0),
-            compute_formality=(args.style_no_formality == 0),
-            compute_oov=(args.style_no_oov == 0),
-            compute_diversity=(args.style_no_diversity == 0),
-            extra_signals=(args.style_no_extra_signals == 0),
+            compute_readability=not args.style_no_readability,
+            compute_formality=not args.style_no_formality,
+            compute_oov=not args.style_no_oov,
+            compute_diversity=not args.style_no_diversity,
+            extra_signals=not args.style_no_extra_signals,
             oov_zipf_threshold=float(args.style_oov_zipf_threshold),
         )
     )
@@ -440,7 +443,7 @@ else:
 # =====================================================
 # Step 6: Context features
 # =====================================================
-if args.extract_context == 1:
+if args.extract_context:
     print("Extracting context features (Source/Domain/Topic/Age)")
 
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
@@ -460,7 +463,7 @@ if args.extract_context == 1:
             topic_dim=int(args.context_topic_dim),
             author_dim=int(args.context_author_dim),
             n_hashes=int(args.context_n_hashes),
-            signed=(args.context_unsigned == 0),
+            signed=not args.context_unsigned,
         )
     )
 
@@ -527,7 +530,7 @@ else:
 # =====================================================
 # Step 7: Merge raw feature PKLs before VAE
 # =====================================================
-if args.merge_raw_features == 1:
+if args.merge_raw_features:
     print("Merging raw feature PKLs before VAE")
 
     raw_feature_dirs = {
@@ -550,11 +553,12 @@ else:
 # =====================================================
 # Step 8: Train VAEs for latent feature extraction
 # =====================================================
-if args.run_vaes == 1:
+if args.run_vaes:
     print("Training VAEs for latent feature extraction")
 
-    vae_configs = {
+    all_vae_configs = {
         "semantic": {
+            "enabled": not args.exclude_semantic,
             "latent_dim": int(args.semantic_latent_dim),
             "hidden_dims": [512, 256],
             "feature_columns": None,
@@ -563,6 +567,7 @@ if args.run_vaes == 1:
             "test_pkl": BASE_DIR / "data" / "features" / "semantic" / "test_semantic.pkl",
         },
         "emotion": {
+            "enabled": not args.exclude_emotion,
             "latent_dim": int(args.emotion_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": ["emo_probs", "sent_probs", "signals"],
@@ -571,6 +576,7 @@ if args.run_vaes == 1:
             "test_pkl": BASE_DIR / "data" / "features" / "emotion" / "test_emotion.pkl",
         },
         "style": {
+            "enabled": not args.exclude_style,
             "latent_dim": int(args.style_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": None,
@@ -579,6 +585,7 @@ if args.run_vaes == 1:
             "test_pkl": BASE_DIR / "data" / "features" / "style" / "test_style.pkl",
         },
         "context": {
+            "enabled": not args.exclude_context,
             "latent_dim": int(args.context_latent_dim),
             "hidden_dims": [256, 128],
             "feature_columns": None,
@@ -587,6 +594,14 @@ if args.run_vaes == 1:
             "test_pkl": BASE_DIR / "data" / "features" / "context" / "test_context.pkl",
         },
     }
+
+    vae_configs = {
+        name: cfg for name, cfg in all_vae_configs.items() if cfg["enabled"]
+    }
+
+    skipped = [name for name, cfg in all_vae_configs.items() if not cfg["enabled"]]
+    if skipped:
+        print(f"Modalities excluded from VAE training: {skipped}")
 
     for feature_name, cfg in vae_configs.items():
         latent_dim = cfg["latent_dim"]
@@ -640,8 +655,15 @@ else:
 # =====================================================
 # Step 9: Merge VAE latent outputs for KAN
 # =====================================================
-if args.merge_vae_latents == 1:
+if args.merge_vae_latents:
     print("Merging VAE latent PKLs for KAN input")
+
+    use_modality = {
+        "semantic": not args.exclude_semantic,
+        "emotion": not args.exclude_emotion,
+        "style": not args.exclude_style,
+        "context": not args.exclude_context,
+    }
 
     latent_dims = {
         "semantic": int(args.semantic_latent_dim),
@@ -653,7 +675,15 @@ if args.merge_vae_latents == 1:
     latent_dirs = {
         name: BASE_DIR / "data" / "vae_outputs" / name / f"latent{dim}"
         for name, dim in latent_dims.items()
+        if use_modality[name]
     }
+
+    skipped = [name for name, enabled in use_modality.items() if not enabled]
+    if skipped:
+        print(f"Modalities excluded from latent merge: {skipped}")
+
+    if not latent_dirs:
+        raise ValueError("At least one modality must be enabled (use_semantic/use_emotion/use_style/use_context) to merge VAE latents.")
 
     merge_output_dir = VAE_LATENT_MERGE_OUTPUT_DIR
     merge_output_dir.mkdir(parents=True, exist_ok=True)
@@ -723,7 +753,7 @@ else:
 # =====================================================
 # Step 10: Train KAN classifier + external evaluation
 # =====================================================
-if args.train_kan == 1:
+if args.train_kan:
     print("Training KAN classifier")
 
     kan_train_pkl = (
