@@ -244,12 +244,12 @@ def run_training(args):
 
     model = KANClassifier(
         input_dim=X_train.shape[1],
-        hidden_dim=args.hidden_dim,
         num_basis=args.num_basis,
+        hidden_dim=args.hidden_dim,
         dropout=args.dropout,
     ).to(device)
 
-    num_parameters = sum(p.numel() for p in model.parameters())
+    num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable parameters: {num_parameters}")
 
     criterion = nn.BCEWithLogitsLoss()
@@ -315,8 +315,8 @@ def run_training(args):
                 {
                     "model_state_dict": model.state_dict(),
                     "input_dim": X_train.shape[1],
-                    "hidden_dim": args.hidden_dim,
                     "num_basis": args.num_basis,
+                    "hidden_dim": args.hidden_dim,
                     "dropout": args.dropout,
                     "scaler_mean": scaler.mean_,
                     "scaler_scale": scaler.scale_,
@@ -387,8 +387,8 @@ def train_kan_from_pkls(
     test_pkl,
     feature_key=None,
     label_key="label",
-    hidden_dim=64,
     num_basis=16,
+    hidden_dim=64,
     dropout=0.2,
     epochs=100,
     batch_size=32,
@@ -410,8 +410,8 @@ def train_kan_from_pkls(
     args.feature_key = feature_key
     args.label_key = label_key
 
-    args.hidden_dim = hidden_dim
     args.num_basis = num_basis
+    args.hidden_dim = hidden_dim
     args.dropout = dropout
 
     args.epochs = epochs
@@ -442,8 +442,8 @@ def load_trained_kan(checkpoint_path: str | Path):
 
     model = KANClassifier(
         input_dim=checkpoint["input_dim"],
-        hidden_dim=checkpoint["hidden_dim"],
         num_basis=checkpoint["num_basis"],
+        hidden_dim=checkpoint["hidden_dim"],
         dropout=checkpoint["dropout"],
     ).to(device)
 
@@ -472,8 +472,8 @@ def main():
     parser.add_argument("--feature_key", default=None)
     parser.add_argument("--label_key", default="label")
 
-    parser.add_argument("--hidden_dim", type=int, default=64)
     parser.add_argument("--num_basis", type=int, default=16)
+    parser.add_argument("--hidden_dim", type=int, default=64)
     parser.add_argument("--dropout", type=float, default=0.2)
 
     parser.add_argument("--epochs", type=int, default=100)

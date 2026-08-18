@@ -16,6 +16,7 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
     log_loss,
+    matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -62,6 +63,8 @@ def evaluate_binary_classifier(
     y_prob,
     threshold=0.5,
     n_bins=10,
+    n_params=None,
+    train_time_sec=None,
 ):
     """
     Standard:
@@ -118,6 +121,11 @@ def evaluate_binary_classifier(
         # Error rates
         "false_positive_rate": float(false_positive_rate),
         "false_negative_rate": float(false_negative_rate),
+
+        # Additional summary metrics
+        "mcc": float(matthews_corrcoef(y_true, y_pred)),
+        "n_params": float(n_params) if n_params is not None else None,
+        "train_time_sec": float(train_time_sec) if train_time_sec is not None else None,
     }
 
     return metrics

@@ -241,8 +241,8 @@ parser.add_argument("--kan_test_pkl", type=str, default=None)
 parser.add_argument("--kan_output_dir", type=str, default=None)
 parser.add_argument("--kan_feature_key", type=str, default=None)
 parser.add_argument("--kan_label_key", type=str, default="label")
-parser.add_argument("--kan_hidden_dim", type=int, default=64)
 parser.add_argument("--kan_num_basis", type=int, default=16)
+parser.add_argument("--kan_hidden_dim", type=int, default=64)
 parser.add_argument("--kan_dropout", type=float, default=0.2)
 parser.add_argument("--kan_epochs", type=int, default=100)
 parser.add_argument("--kan_batch_size", type=int, default=32)
@@ -812,8 +812,8 @@ if args.train_kan:
         test_pkl=str(kan_test_pkl),
         feature_key=args.kan_feature_key,
         label_key=args.kan_label_key,
-        hidden_dim=int(args.kan_hidden_dim),
         num_basis=int(args.kan_num_basis),
+        hidden_dim=int(args.kan_hidden_dim),
         dropout=float(args.kan_dropout),
         epochs=int(args.kan_epochs),
         batch_size=int(args.kan_batch_size),
@@ -843,6 +843,8 @@ if args.train_kan:
             y_prob=y_prob,
             threshold=0.5,
             n_bins=10,
+            n_params=kan_result["num_parameters"],
+            train_time_sec=kan_result["training_time_seconds"],
         )
 
         all_metrics[split] = split_metrics
@@ -925,8 +927,8 @@ if args.train_kan:
             "dropout": float(args.vae_dropout),
         },
         kan_hyperparams={
-            "hidden_dim": int(args.kan_hidden_dim),
             "num_basis": int(args.kan_num_basis),
+            "hidden_dim": int(args.kan_hidden_dim),
             "dropout": float(args.kan_dropout),
             "batch_size": int(args.kan_batch_size),
             "lr": float(args.kan_lr),
