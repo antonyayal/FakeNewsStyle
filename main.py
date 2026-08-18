@@ -1,4 +1,36 @@
 # main.py
+"""
+FakeNewsStyle pipeline entry point.
+
+Goal
+----
+Drive the full pipeline end to end -- from raw XLSX corpus to a trained KAN
+classifier -- through a single CLI with one boolean flag per stage. Flags are
+independent `if` blocks executed top-to-bottom in one process, so any subset
+can be combined in a single invocation.
+
+Pipeline stages (flag -> what it does -> output)
+-------------------------------------------------
+--prepare_corpus       data/raw/*.xlsx            -> data/01_corpus_pkl/*.pkl
+--preprocess_text      adds text_xlmr, label       -> data/02_corpus_clean/*.pkl
+--extract_semantic/
+--extract_emotion/
+--extract_style/
+--extract_context       per-branch feature extractors -> data/03_features_raw/{branch}/{split}_{branch}.pkl
+--merge_raw_features    row-order concat, one-hot   -> data/04_features_merged/{split}.pkl
+--run_vaes              one beta-VAE per branch     -> models/vae/{branch}/latent{dim}/ + data/05_vae_latents/{branch}/latent{dim}/{split}.pkl
+--merge_vae_latents     concat latents, {branch}_ prefix -> data/06_vae_latents_merged/{split}.pkl
+--train_kan             trains + evaluates KAN      -> data/07_kan_runs/{output_dir}/ + results/{run_id}.json
+
+Usage
+-----
+    python main.py --prepare_corpus --preprocess_text
+    python main.py --extract_semantic --extract_emotion --extract_style --extract_context
+    python main.py --merge_raw_features --run_vaes --merge_vae_latents --train_kan
+
+Run `python main.py --help` for the full flag list (per-branch latent dims,
+KAN hyperparameters, modality exclusion via --exclude_{branch}, etc.).
+"""
 # =====================================================
 # Imports
 # =====================================================

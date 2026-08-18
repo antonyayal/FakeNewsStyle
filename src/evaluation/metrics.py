@@ -1,5 +1,41 @@
 # src/evaluation/metrics.py
 # -*- coding: utf-8 -*-
+"""
+Binary classifier evaluation metrics for the KAN classifier.
+
+Goal
+----
+Compute a standard set of metrics (accuracy, ROC/PR-AUC, calibration,
+confusion matrix, etc.) from (y_true, y_prob) and persist them, plus an
+optional per-Topic accuracy/F1 breakdown for error analysis.
+
+Why this file exists
+--------------------
+- Keeps evaluation logic in one place so main.py's --train_kan step and any
+  standalone analysis script compute metrics the same way.
+- Assumes the same label convention as src/models/kan.py: y_prob is
+  P(Fake), i.e. 1 = Fake, 0 = True/Real.
+
+Key functions
+-------------
+- evaluate_binary_classifier(y_true, y_prob, threshold=0.5, n_bins=10, ...)
+  -> dict with accuracy, balanced_accuracy, precision/recall/specificity,
+  f1, roc_auc, pr_auc, log_loss, brier_score, ece (expected_calibration_error),
+  entropy_mean/std, confusion matrix counts, mcc, and optional
+  n_params/train_time_sec passthrough fields.
+- save_metrics(metrics, output_dir, prefix) -> writes both
+  {prefix}.json and {prefix}.csv (the source of train/val/test_metrics.*
+  files under data/07_kan_runs/).
+- compute_topic_breakdown(y_true, y_prob, topics) -> per-Topic accuracy/F1,
+  used for the test-split breakdown in main.py's --train_kan step.
+
+Usage (example)
+---------------
+from src.evaluation.metrics import evaluate_binary_classifier, save_metrics
+
+metrics = evaluate_binary_classifier(y_true, y_prob, threshold=0.5, n_bins=10)
+save_metrics(metrics, output_dir="data/07_kan_runs/merged", prefix="test_metrics")
+"""
 
 from __future__ import annotations
 

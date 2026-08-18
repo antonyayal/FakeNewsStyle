@@ -142,10 +142,10 @@ def dims_for_thresholds(cum_var: np.ndarray, thresholds: List[float]) -> Dict[fl
 
 def heuristic_latent_suggestion(input_dim: int, dims_map: Dict[float, int]) -> int:
     """
-    Regla práctica:
-    - parte de la dimensión para 90%
-    - la ajusta a un valor "bonito" para redes
-    - no deja que crezca demasiado si el espacio original es pequeño
+    Practical rule:
+    - starts from the dimension for 90%
+    - adjusts it to a "nice" value for networks
+    - doesn't let it grow too much if the original space is small
     """
     d90 = dims_map[0.90]
 
@@ -222,8 +222,8 @@ def save_variance_plot(
 
     plt.figure(figsize=(9, 5))
     plt.plot(x, cum_var, linewidth=2)
-    plt.xlabel("Número de componentes")
-    plt.ylabel("Varianza acumulada explicada")
+    plt.xlabel("Number of components")
+    plt.ylabel("Cumulative explained variance")
     plt.title(title)
     plt.grid(True, alpha=0.3)
 
@@ -246,32 +246,32 @@ def print_report(path: Path, info: Dict[str, Any], result: Dict[str, Any]) -> No
     print(f"PKL: {path}")
     print("=" * 80)
 
-    print(f"Formato detectado: {info.get('source_type')} / {info.get('mode')}")
+    print(f"Detected format: {info.get('source_type')} / {info.get('mode')}")
     if "embedding_columns" in info:
-        print(f"Columnas embedding: {info['embedding_columns']}")
+        print(f"Embedding columns: {info['embedding_columns']}")
     if "numeric_columns" in info:
         preview = info["numeric_columns"][:12]
-        print(f"Columnas numéricas: {preview}{' ...' if len(info['numeric_columns']) > 12 else ''}")
+        print(f"Numeric columns: {preview}{' ...' if len(info['numeric_columns']) > 12 else ''}")
 
-    print(f"\nMuestras: {result['num_samples']}")
-    print(f"Dimensión original: {result['input_dim']}")
+    print(f"\nSamples: {result['num_samples']}")
+    print(f"Original dimension: {result['input_dim']}")
 
-    print("\nDimensiones requeridas por varianza acumulada:")
+    print("\nDimensions required by cumulative variance:")
     for t in [0.80, 0.90, 0.95, 0.99]:
         print(f"  {int(t*100):>2}% -> {result['dims_map'][t]}")
 
-    print(f"\nSugerencia base para VAE: {result['suggested_latent_dim']}")
+    print(f"\nBase suggestion for VAE: {result['suggested_latent_dim']}")
 
     d_in = result["input_dim"]
     d_lat = result["suggested_latent_dim"]
     compression = d_in / max(d_lat, 1)
-    print(f"Compresión aproximada: {d_in} -> {d_lat} ({compression:.2f}x)")
+    print(f"Approximate compression: {d_in} -> {d_lat} ({compression:.2f}x)")
 
-    print("\nInterpretación:")
-    print("  - 80%: compresión agresiva")
-    print("  - 90%: buen punto de partida")
-    print("  - 95%: compresión conservadora")
-    print("  - 99%: casi sin pérdida, pero poco compacta")
+    print("\nInterpretation:")
+    print("  - 80%: aggressive compression")
+    print("  - 90%: good starting point")
+    print("  - 95%: conservative compression")
+    print("  - 99%: near-lossless, but not very compact")
 
 
 # =====================================================
@@ -291,7 +291,7 @@ def analyze_one_file(path: Path, output_dir: Path, standardize: bool = True) -> 
         out_path=plot_path,
         title=f"PCA variance - {stem}",
     )
-    print(f"\nGráfica guardada en: {plot_path}")
+    print(f"\nPlot saved to: {plot_path}")
 
 
 def main() -> None:

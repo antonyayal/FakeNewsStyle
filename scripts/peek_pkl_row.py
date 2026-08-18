@@ -86,10 +86,10 @@ if isinstance(data, pd.DataFrame):
             print(f"Global mean: {arr.mean():.6f}")
             print(f"Global std:  {arr.std():.6f}")
 
-            print("\nPrimeras 20 dimensiones:")
+            print("\nFirst 20 dimensions:")
             print(arr[row][:20])
 
-            print("\nRango por dimensión (primeras 20):")
+            print("\nRange per dimension (first 20):")
 
             max_show = min(20, arr.shape[1])
 
@@ -126,10 +126,10 @@ elif isinstance(data, dict):
         print(f"Global mean: {X.mean():.6f}")
         print(f"Global std:  {X.std():.6f}")
 
-        print("\nPrimer vector (primeras 20 dims):")
+        print("\nFirst vector (first 20 dims):")
         print(X[0][:20])
 
-        print("\nRango por dimensión (primeras 20):")
+        print("\nRange per dimension (first 20):")
 
         max_show = min(20, X.shape[1])
 

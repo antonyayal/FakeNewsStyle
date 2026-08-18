@@ -1,3 +1,14 @@
+# scripts/all_xlsx_to_pkl.py
+"""
+Standalone XLSX -> PKL converter (superseded by `python main.py --prepare_corpus`).
+
+Note: BASE_DIR here resolves to scripts/, and the referenced paths
+(data/raw/FakeNewsCorpusSpanish, data/processed/FakeNewsCorpusSpanish) don't
+match the current repo layout (data/raw/*.xlsx flat, data/01_corpus_pkl/
+output) -- this script predates that layout and is kept for reference only.
+Use `python main.py --prepare_corpus` for the current corpus-prep step.
+"""
+
 import argparse
 import sys
 from pathlib import Path

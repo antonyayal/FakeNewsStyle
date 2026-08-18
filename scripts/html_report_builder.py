@@ -80,7 +80,7 @@ def load_all_scope() -> Tuple[List[Dict[str, Any]], str]:
         tag = tags.get(record.get("run_id"))
         if tag:
             record["_batch_id"], record["_batch_label"], record["_batch_phase"] = tag
-    return records, "Todas las corridas disponibles"
+    return records, "All available runs"
 
 
 def load_batch_scope(batch_path: Path) -> Tuple[List[Dict[str, Any]], str]:
@@ -99,7 +99,7 @@ def load_batch_scope(batch_path: Path) -> Tuple[List[Dict[str, Any]], str]:
         record["_batch_label"] = run.get("label")
         record["_batch_phase"] = run.get("phase")
         records.append(record)
-    scope_desc = f"Lote {manifest['batch_id']} ({len(records)} corridas)"
+    scope_desc = f"Batch {manifest['batch_id']} ({len(records)} runs)"
     return records, scope_desc
 
 
@@ -108,31 +108,31 @@ def load_batch_scope(batch_path: Path) -> Tuple[List[Dict[str, Any]], str]:
 # =====================================================
 def prompt_scope_interactive() -> Tuple[str, Optional[Path]]:
     batches = list_batches()
-    print("\n¿Qué quieres incluir en el reporte?")
-    print("  1) Todas las corridas disponibles (results/ + todos los lotes)")
-    print("  2) Solo un lote específico de results/batches/")
-    choice = input("Elige una opción [1/2]: ").strip()
+    print("\nWhat do you want to include in the report?")
+    print("  1) All available runs (results/ + every batch)")
+    print("  2) Just one specific batch from results/batches/")
+    choice = input("Choose an option [1/2]: ").strip()
 
     if choice != "2":
         return "all", None
 
     if not batches:
-        print("No hay lotes disponibles en results/batches/. Usando 'todas las corridas'.")
+        print("No batches available in results/batches/. Using 'all runs'.")
         return "all", None
 
-    print("\nLotes disponibles:")
+    print("\nAvailable batches:")
     for i, batch_path in enumerate(batches, start=1):
         manifest = load_manifest(batch_path)
         n_runs = len(manifest.get("runs", []))
-        print(f"  {i}) {manifest['batch_id']}  ({n_runs} corridas, creado {manifest.get('created_at', '?')})")
+        print(f"  {i}) {manifest['batch_id']}  ({n_runs} runs, created {manifest.get('created_at', '?')})")
 
-    idx_raw = input(f"Elige un lote [1-{len(batches)}]: ").strip()
+    idx_raw = input(f"Choose a batch [1-{len(batches)}]: ").strip()
     try:
         idx = int(idx_raw)
         if not (1 <= idx <= len(batches)):
             raise ValueError
     except ValueError:
-        print(f"Selección inválida: {idx_raw!r}. Cancelando.")
+        print(f"Invalid selection: {idx_raw!r}. Cancelling.")
         sys.exit(1)
 
     return "batch", batches[idx - 1]
@@ -398,20 +398,20 @@ function std(arr, m) {
 // ---------- Narrative summary ----------
 function renderNarrative() {
   const container = document.getElementById('narrative-list');
-  if (!runs.length) { container.innerHTML = '<li>No hay corridas para resumir.</li>'; return; }
+  if (!runs.length) { container.innerHTML = '<li>No runs to summarize.</li>'; return; }
 
   const items = [];
 
   const byF1 = runs.filter(r => r.test_f1 !== null && r.test_f1 !== undefined).sort((a, b) => b.test_f1 - a.test_f1);
   if (byF1.length) {
     const r = byF1[0];
-    items.push(`Mejor corrida por F1 de test: <strong>${r.batch_label || r.run_id}</strong> (${r.combo}) — F1=${fmtNum(r.test_f1)}, accuracy=${fmtNum(r.test_accuracy)}.`);
+    items.push(`Best run by test F1: <strong>${r.batch_label || r.run_id}</strong> (${r.combo}) — F1=${fmtNum(r.test_f1)}, accuracy=${fmtNum(r.test_accuracy)}.`);
   }
 
   const byEce = runs.filter(r => r.test_ece !== null && r.test_ece !== undefined).sort((a, b) => a.test_ece - b.test_ece);
   if (byEce.length) {
     const r = byEce[0];
-    items.push(`Mejor calibración (ECE más bajo): <strong>${r.batch_label || r.run_id}</strong> (${r.combo}) — ECE=${fmtNum(r.test_ece)}.`);
+    items.push(`Best calibration (lowest ECE): <strong>${r.batch_label || r.run_id}</strong> (${r.combo}) — ECE=${fmtNum(r.test_ece)}.`);
   }
 
   const byCombo = {};
@@ -424,15 +424,15 @@ function renderNarrative() {
     const maxAcc = Math.max(...comboStats.map(c => c.mean));
     const withinRange = comboStats.filter(c => maxAcc - c.mean <= 0.02).sort((a, b) => a.nExtractors - b.nExtractors);
     const winner = withinRange[0];
-    items.push(`Combinación más eficiente (accuracy media dentro de 2pts del máximo, ${fmtNum(maxAcc)}): <strong>${winner.combo}</strong> (${winner.nExtractors} extractor${winner.nExtractors === 1 ? '' : 'es'}, accuracy media=${fmtNum(winner.mean)}).`);
+    items.push(`Most efficient combination (mean accuracy within 2pts of the max, ${fmtNum(maxAcc)}): <strong>${winner.combo}</strong> (${winner.nExtractors} extractor${winner.nExtractors === 1 ? '' : 's'}, mean accuracy=${fmtNum(winner.mean)}).`);
   }
 
   const degenerateRuns = runs.map(r => ({ r, tag: detectDegenerate(r) })).filter(x => x.tag);
   if (degenerateRuns.length) {
-    const list = degenerateRuns.map(x => `${x.r.batch_label || x.r.run_id} (predice siempre "${x.tag}")`).join(', ');
-    items.push(`<span class="warn-item">⚠ ${degenerateRuns.length} corrida(s) colapsada(s) al baseline: ${list}.</span>`);
+    const list = degenerateRuns.map(x => `${x.r.batch_label || x.r.run_id} (always predicts "${x.tag}")`).join(', ');
+    items.push(`<span class="warn-item">⚠ ${degenerateRuns.length} run(s) collapsed to the baseline: ${list}.</span>`);
   } else {
-    items.push('Ninguna corrida colapsó a predecir siempre la misma clase.');
+    items.push('No run collapsed into always predicting the same class.');
   }
 
   container.innerHTML = items.map(i => `<li>${i}</li>`).join('');
@@ -442,29 +442,29 @@ function renderNarrative() {
 let gapThreshold = 0.15;
 const TABLE_COLUMNS = [
   { key: 'run_id', label: 'run_id', sort: (r) => r.run_id,
-    tip: 'Identificador único de la corrida (timestamp + hash corto).' },
-  { key: 'timestamp', label: 'Fecha/hora', sort: (r) => r.timestamp,
-    tip: 'Fecha y hora en que terminó el entrenamiento de esta corrida.' },
-  { key: 'combo', label: 'Extractores activos', sort: (r) => r.combo,
-    tip: 'Qué ramas de features (semantic / emotion / style / context) alimentaron al KAN en esta corrida.' },
-  { key: 'epochs', label: 'Épocas KAN (run/pedidas)', sort: (r) => r.epochs.kan_epochs_run,
-    tip: 'Épocas que realmente corrió el KAN vs. las que se pidieron. Si son distintas, se activó el early stopping.' },
+    tip: 'Unique run identifier (timestamp + short hash).' },
+  { key: 'timestamp', label: 'Date/time', sort: (r) => r.timestamp,
+    tip: 'Date and time this run finished training.' },
+  { key: 'combo', label: 'Active extractors', sort: (r) => r.combo,
+    tip: 'Which feature branches (semantic / emotion / style / context) fed the KAN in this run.' },
+  { key: 'epochs', label: 'KAN epochs (run/requested)', sort: (r) => r.epochs.kan_epochs_run,
+    tip: 'Epochs the KAN actually ran vs. the ones requested. If they differ, early stopping kicked in.' },
   { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
-    tip: 'Accuracy sobre el split de test (datos nunca vistos durante el entrenamiento).' },
-  { key: 'gap', label: 'Gap (train−test)', sort: (r) => overfitGap(r),
-    tip: 'Accuracy de train menos accuracy de test. Un gap grande indica sobreajuste: el modelo memorizó el train y generaliza mal.' },
+    tip: 'Accuracy on the test split (data never seen during training).' },
+  { key: 'gap', label: 'Gap (train-test)', sort: (r) => overfitGap(r),
+    tip: 'Train accuracy minus test accuracy. A large gap indicates overfitting: the model memorized train and generalizes poorly.' },
   { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
-    tip: 'F1-score de la clase Fake en test (media armónica de precision y recall).' },
+    tip: 'F1-score of the Fake class on test (harmonic mean of precision and recall).' },
   { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc,
-    tip: 'Área bajo la curva ROC en test: qué tan bien separa el modelo Fake de True, para cualquier umbral.' },
+    tip: 'Area under the ROC curve on test: how well the model separates Fake from True, across any threshold.' },
   { key: 'seed', label: 'Seed', sort: (r) => r.seed,
-    tip: 'Semilla aleatoria del entrenamiento del KAN. Corridas idénticas con distinta seed muestran cuánta varianza hay por puro azar de inicialización.' },
-  { key: 'training_time', label: 'Tiempo entren. (s)', sort: (r) => r.training_time_seconds,
-    tip: 'Tiempo de entrenamiento del KAN en segundos (no incluye extracción de features ni entrenamiento de VAEs).' },
-  { key: 'num_parameters', label: '# Parámetros', sort: (r) => r.num_parameters,
-    tip: 'Número total de parámetros entrenables del clasificador KAN: indica su capacidad/tamaño.' },
-  { key: 'batch', label: 'Lote', sort: (r) => r.batch_label || '',
-    tip: 'Lote de scripts/run_experiments.py (o similar) al que pertenece esta corrida, y su fase dentro del plan.' },
+    tip: 'Random seed for KAN training. Identical runs with different seeds show how much variance comes from pure initialization randomness.' },
+  { key: 'training_time', label: 'Train time (s)', sort: (r) => r.training_time_seconds,
+    tip: 'KAN training time in seconds (does not include feature extraction or VAE training).' },
+  { key: 'num_parameters', label: '# Parameters', sort: (r) => r.num_parameters,
+    tip: 'Total trainable parameters of the KAN classifier: indicates its capacity/size.' },
+  { key: 'batch', label: 'Batch', sort: (r) => r.batch_label || '',
+    tip: 'Batch from scripts/run_experiments.py (or similar) this run belongs to, and its phase within the plan.' },
 ];
 
 let sortState = { key: 'timestamp', asc: true };
@@ -512,7 +512,7 @@ function renderTable() {
   const rows = filteredSortedRuns();
   const tbody = document.getElementById('table-body');
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="${TABLE_COLUMNS.length}" class="empty-msg">Sin corridas que coincidan con el filtro.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${TABLE_COLUMNS.length}" class="empty-msg">No runs match the filter.</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map(r => {
@@ -523,7 +523,7 @@ function renderTable() {
     const gapCell = gap === null ? '—' : `<span class="${Math.abs(gap) >= gapThreshold ? 'gap-warn' : ''}">${gap.toFixed(4)}</span>`;
     const degenerate = detectDegenerate(r);
     const rowClass = degenerate ? 'degenerate-row' : '';
-    const degenerateTag = degenerate ? `<span class="degenerate-tag">⚠ colapsó (predice siempre "${degenerate}")</span>` : '';
+    const degenerateTag = degenerate ? `<span class="degenerate-tag">⚠ collapsed (always predicts "${degenerate}")</span>` : '';
     return `<tr class="${rowClass}">
       <td><code>${r.run_id}</code>${degenerateTag}</td>
       <td>${fmtTs(r.timestamp)}</td>
@@ -596,7 +596,7 @@ function renderHeatmap() {
     z, x: metricLabels, y: combos, type: 'heatmap', colorscale: 'Viridis',
     text, texttemplate: '%{text}', hovertemplate: '%{y} · %{x}: %{z:.4f}<extra></extra>',
   }], {
-    title: 'Combinaciones de extractores vs. métricas de test (media±std si hay varias corridas)',
+    title: 'Extractor combinations vs. test metrics (mean±std if there are multiple runs)',
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { color: '#e6e9f2' },
     margin: { t: 40, l: 220 },
@@ -678,11 +678,11 @@ function classBreakdownTable(t) {
     const m = cb[cls];
     return `<tr><td>${cls}</td><td>${m.precision.toFixed(4)}</td><td>${m.recall.toFixed(4)}</td><td>${m.f1.toFixed(4)}</td><td>${m.support}</td></tr>`;
   }).join('');
-  return `<table class="mini"><tr><th>Clase</th><th>Precision</th><th>Recall</th><th>F1</th><th>Support</th></tr>${rows}</table>`;
+  return `<table class="mini"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Support</th></tr>${rows}</table>`;
 }
 
 function topicBreakdownTable(tb) {
-  if (!tb) return '<p style="color:var(--text-dim)">No disponible para esta corrida (requiere el campo topic_breakdown, agregado en corridas recientes).</p>';
+  if (!tb) return '<p style="color:var(--text-dim)">Not available for this run (requires the topic_breakdown field, added in recent runs).</p>';
   const rows = Object.entries(tb).sort((a, b) => b[1].n - a[1].n).map(([topic, m]) =>
     `<tr><td>${topic}</td><td>${m.n}</td><td>${m.accuracy.toFixed(4)}</td><td>${m.f1.toFixed(4)}</td></tr>`
   ).join('');
@@ -697,7 +697,7 @@ function renderCards() {
     const degenerate = detectDegenerate(r);
     const gap = overfitGap(r);
     const banner = degenerate
-      ? `<div class="degenerate-banner">⚠ Esta corrida colapsó al baseline: predice siempre "${degenerate}" (recall=${fmtNum(t.recall)}, specificity=${fmtNum(t.specificity)}).</div>`
+      ? `<div class="degenerate-banner">⚠ This run collapsed to the baseline: always predicts "${degenerate}" (recall=${fmtNum(t.recall)}, specificity=${fmtNum(t.specificity)}).</div>`
       : '';
     return `<details class="run-card">
       <summary>
@@ -705,12 +705,12 @@ function renderCards() {
         ${extractorBadges(r.active_extractors)}
         <span class="metric">${label}</span>
         <span class="metric">acc=${fmtNum(t.accuracy)} · f1=${fmtNum(t.f1)} · roc_auc=${fmtNum(t.roc_auc)}${gap !== null ? ` · gap=${gap.toFixed(4)}` : ''}</span>
-        ${degenerate ? `<span class="degenerate-tag">⚠ colapsó ("${degenerate}")</span>` : ''}
+        ${degenerate ? `<span class="degenerate-tag">⚠ collapsed ("${degenerate}")</span>` : ''}
       </summary>
       <div class="card-body">
         <div>
           ${banner}
-          <h4 style="color:var(--text-dim); font-size:0.82rem; text-transform:uppercase; margin:0 0 6px;">Matriz de confusión (test)</h4>
+          <h4 style="color:var(--text-dim); font-size:0.82rem; text-transform:uppercase; margin:0 0 6px;">Confusion matrix (test)</h4>
           <table class="confusion">
             <tr><th></th><th>Pred: True</th><th>Pred: Fake</th></tr>
             <tr><th>Real: True</th><td class="tn">${t.tn ?? '—'}</td><td class="fp">${t.fp ?? '—'}</td></tr>
@@ -720,27 +720,27 @@ function renderCards() {
             git commit: <code>${(r.git_commit || '').slice(0, 10) || '—'}</code><br>
             dataset hash: <code>${r.dataset_hash ? r.dataset_hash.slice(0, 12) : '—'}</code><br>
             seed: ${r.seed ?? '—'} &nbsp;·&nbsp;
-            tiempo entren.: ${r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) + 's' : '—'} &nbsp;·&nbsp;
-            # parámetros: ${r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—'}<br>
+            train time: ${r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) + 's' : '—'} &nbsp;·&nbsp;
+            # parameters: ${r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—'}<br>
             latent dims: ${Object.entries(r.latent_dims || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}
           </p>
         </div>
         <div class="hparams-cols">
-          ${hparamsBlock('Épocas', r.epochs)}
+          ${hparamsBlock('Epochs', r.epochs)}
           ${hparamsBlock('VAE hyperparams', r.vae_hyperparams)}
           ${hparamsBlock('KAN hyperparams', r.kan_hyperparams)}
         </div>
       </div>
       <div class="section-block">
-        <h4>Desglose por clase (test)</h4>
+        <h4>Per-class breakdown (test)</h4>
         ${classBreakdownTable(t)}
       </div>
       <div class="section-block">
-        <h4>Accuracy / F1 por Topic (test)</h4>
+        <h4>Accuracy / F1 by Topic (test)</h4>
         ${topicBreakdownTable(r.topic_breakdown)}
       </div>
     </details>`;
-  }).join('') || '<p class="empty-msg">No hay corridas para mostrar.</p>';
+  }).join('') || '<p class="empty-msg">No runs to show.</p>';
 }
 
 renderNarrative();
@@ -775,29 +775,29 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
       <div class="meta">
         <span>Generado: {generated_at}</span>
         <span>Corridas incluidas: {len(flat_runs)}</span>
-        <span>Alcance: {scope_desc}</span>
+        <span>Scope: {scope_desc}</span>
         {dataset_hash_note}
       </div>
     </header>
     """
 
-    table_cols_header = """<th>run_id</th><th>Fecha/hora</th><th>Extractores activos</th>
-      <th>Épocas KAN (run/pedidas)</th><th>Test accuracy</th><th>Gap (train−test)</th><th>Test F1</th>
-      <th>Test ROC-AUC</th><th>Seed</th><th>Tiempo entren. (s)</th><th># Parámetros</th><th>Lote</th>"""
+    table_cols_header = """<th>run_id</th><th>Date/time</th><th>Active extractors</th>
+      <th>KAN epochs (run/requested)</th><th>Test accuracy</th><th>Gap (train-test)</th><th>Test F1</th>
+      <th>Test ROC-AUC</th><th>Seed</th><th>Train time (s)</th><th># Parameters</th><th>Batch</th>"""
 
     body = f"""
 {header_html}
 
 <section class="narrative">
-  <h3>Resumen automático</h3>
+  <h3>Automatic summary</h3>
   <ul id="narrative-list"></ul>
 </section>
 
 <section id="summary">
-  <h2>Tabla resumen</h2>
+  <h2>Summary table</h2>
   <div class="controls">
-    <input type="text" id="table-filter" placeholder="Filtrar por run_id, extractores o lote...">
-    <label>Umbral de alerta de gap (train−test): <input type="number" id="gap-threshold" value="0.15" step="0.01" min="0" max="1"></label>
+    <input type="text" id="table-filter" placeholder="Filter by run_id, extractors, or batch...">
+    <label>Gap (train-test) alert threshold: <input type="number" id="gap-threshold" value="0.15" step="0.01" min="0" max="1"></label>
   </div>
   <div style="overflow-x:auto;">
     <table class="summary">
@@ -808,24 +808,24 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
 </section>
 
 <section id="charts-a">
-  <h2>Overfitting: accuracy por split</h2>
+  <h2>Overfitting: accuracy per split</h2>
   <div class="chart-grid full"><div class="chart-box"><div id="bar-chart" style="height:420px;"></div></div></div>
 </section>
 
 <section id="charts-b">
-  <h2>Combinaciones de extractores vs. métricas de test</h2>
+  <h2>Extractor combinations vs. test metrics</h2>
   <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart" style="height:460px;"></div></div></div>
   <div id="seed-stability-section" class="section-block seed-stability-table" style="display:none;">
-    <h4>Estabilidad entre semillas (mismo combo + hiperparámetros, distinta seed)</h4>
+    <h4>Stability across seeds (same combo + hyperparameters, different seed)</h4>
     <table class="mini">
-      <thead><tr><th>Combinación</th><th># corridas</th><th>Seeds</th><th>Accuracy (media ± std)</th><th>F1 (media ± std)</th></tr></thead>
+      <thead><tr><th>Combination</th><th># runs</th><th>Seeds</th><th>Accuracy (mean ± std)</th><th>F1 (mean ± std)</th></tr></thead>
       <tbody id="seed-stability-body"></tbody>
     </table>
   </div>
 </section>
 
 <section id="charts-c">
-  <h2>Calibración: ECE / Brier score vs. accuracy (test)</h2>
+  <h2>Calibration: ECE / Brier score vs. accuracy (test)</h2>
   <div class="chart-grid">
     <div class="chart-box"><div id="scatter-ece" style="height:400px;"></div></div>
     <div class="chart-box"><div id="scatter-brier" style="height:400px;"></div></div>
@@ -833,11 +833,11 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
 </section>
 
 <section id="cards">
-  <h2>Detalle por corrida</h2>
+  <h2>Per-run detail</h2>
   <div id="run-cards"></div>
 </section>
 
-<footer>FakeNewsStyle — reporte generado por scripts/html_report_builder.py</footer>
+<footer>FakeNewsStyle — report generated by scripts/html_report_builder.py</footer>
 
 <script id="report-data" type="application/json">{json.dumps(payload, ensure_ascii=False)}</script>
 <script src="{PLOTLY_CDN}"></script>
@@ -845,11 +845,11 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
 """
 
     return f"""<!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reporte comparativo — FakeNewsStyle</title>
+<title>Comparison report — FakeNewsStyle</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -878,11 +878,11 @@ def main():
         batch_id = load_manifest(scope_arg)["batch_id"]
 
     if not records:
-        print("No se encontraron corridas para el alcance elegido.")
+        print("No runs found for the chosen scope.")
         return
 
     df = build_dataframe(records)
-    print(f"\nCargadas {len(df)} corridas. Alcance: {scope_desc}")
+    print(f"\nLoaded {len(df)} runs. Scope: {scope_desc}")
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -895,7 +895,7 @@ def main():
     html = render_html(records, scope_kind, scope_desc, generated_at)
     out_path.write_text(html, encoding="utf-8")
 
-    print(f"Reporte HTML guardado: {out_path}")
+    print(f"HTML report saved: {out_path}")
 
 
 if __name__ == "__main__":

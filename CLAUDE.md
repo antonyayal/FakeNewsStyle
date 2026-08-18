@@ -65,7 +65,7 @@ raw xlsx -> 01_corpus_pkl -> 02_corpus_clean (text_xlmr)
 
 ## Conventions
 
-- Spanish for comments/docs, English for code/identifiers.
+- English for comments/docs and code/identifiers. Every `.py` file should open with a module-level docstring summarizing what it does (goal, inputs/outputs, usage) -- see `src/features/semantic_extractor.py` for the template.
 - `pathlib.Path` everywhere; scripts resolve `BASE_DIR = Path(__file__).resolve().parent` and `sys.path.insert(0, str(BASE_DIR))`.
 - Extractor logging: `get_logger(log_dir, name)` writes console + a timestamped file `{log_dir}/{name}_{YYYY-MM-DD_HH-MM-SS}.log` (see `logs/features/*`, `logs/prepare_corpus/*`). Follow this pattern for any new extractor/stage.
 - Feature PKL naming: `data/03_features_raw/{branch}/{split}_{branch}.pkl`; VAE latent PKLs at `data/05_vae_latents/{branch}/latent{dim}/{split}.pkl`; VAE model checkpoints at `models/vae/{branch}/latent{dim}/` (only the dim matching `main.py`'s current default is kept — `semantic=128, emotion=16, style=16, context=64` — stale sweep dirs get pruned).

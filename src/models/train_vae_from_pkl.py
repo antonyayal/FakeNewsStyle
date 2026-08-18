@@ -1,5 +1,50 @@
 # src/models/train_vae_from_pkl.py
 # -*- coding: utf-8 -*-
+"""
+Beta-VAE trainer, generic over any per-branch feature PKL.
+
+Goal
+----
+Train one beta-VAE (`reconstruction_loss + beta * kl_loss`, Dense+Dropout
+encoder/decoder mirrored around `hidden_dims`) per feature branch (semantic/
+emotion/style/context) and export its latent representation for train/val/
+test, so main.py's --run_vaes step can compress each branch independently
+before the KAN fusion stage.
+
+Why this file exists
+--------------------
+- Each branch's raw features have a different shape and column layout
+  (semantic: one embedding column; emotion: three list-columns via
+  feature_column=[...]; style/context: a dict payload with "X"). extract_features()
+  normalizes all of these into a plain (N, D) float32 matrix before training.
+- A StandardScaler is fit on train and reused (not refit) for val/test, so
+  the VAE always sees the same feature scale it was trained on.
+
+Outputs
+-------
+- Model artifacts -> output_model_dir: encoder.keras, decoder.keras,
+  vae_final.weights.h5, vae_best.weights.h5 (best val_loss checkpoint),
+  scaler.joblib.
+- Latent PKLs -> output_data_dir/{split}.pkl with columns
+  {feature_name}_latent_{i} (+ "label" if available), plus raw
+  z_mean/z_log_var/z/y .npy arrays per split.
+
+Usage (example)
+---------------
+from src.models.train_vae_from_pkl import train_vae_from_paths
+
+train_vae_from_paths(
+    train_pkl="data/03_features_raw/semantic/train_semantic.pkl",
+    val_pkl="data/03_features_raw/semantic/val_semantic.pkl",
+    test_pkl="data/03_features_raw/semantic/test_semantic.pkl",
+    latent_dim=128, hidden_dims=[512, 256], feature_name="semantic",
+    output_data_dir="data/05_vae_latents/semantic/latent128",
+    output_model_dir="models/vae/semantic/latent128",
+)
+
+Also runnable standalone: `python -m src.models.train_vae_from_pkl --train_pkl ...`
+(see main() below for the full CLI flag list).
+"""
 
 from __future__ import annotations
 
@@ -173,8 +218,8 @@ def extract_features(
             return X, y
 
         raise ValueError(
-            f"Dict no soportado. Keys disponibles: {list(obj.keys())}. "
-            "Usa keys 'X'/'y' o 'features'/'labels'."
+            f"Unsupported dict. Available keys: {list(obj.keys())}. "
+            "Use keys 'X'/'y' or 'features'/'labels'."
         )
 
     if isinstance(obj, pd.DataFrame):
@@ -187,7 +232,7 @@ def extract_features(
             y = df[label_column].values
             df = df.drop(columns=[label_column])
 
-        # Caso explícito: una columna o varias columnas
+        # Explicit case: one or several columns
         if feature_column:
             if isinstance(feature_column, str):
                 feature_column = [feature_column]
@@ -197,8 +242,8 @@ def extract_features(
             for col_name in feature_column:
                 if col_name not in df.columns:
                     raise ValueError(
-                        f"La columna '{col_name}' no existe. "
-                        f"Columnas disponibles: {list(df.columns)}"
+                        f"Column '{col_name}' does not exist. "
+                        f"Available columns: {list(df.columns)}"
                     )
 
                 col = df[col_name]
@@ -213,30 +258,30 @@ def extract_features(
             X = np.concatenate(arrays, axis=1).astype(np.float32)
             return X, y
 
-        # Caso automático: una sola columna vectorial
+        # Automatic case: a single vector column
         vector_cols = [c for c in df.columns if is_vector_column(df[c])]
 
         if len(vector_cols) == 1:
-            print(f"[INFO] Detectada columna vectorial: {vector_cols[0]}")
+            print(f"[INFO] Detected vector column: {vector_cols[0]}")
             X = np.vstack(df[vector_cols[0]].values).astype(np.float32)
             return X, y
 
         if len(vector_cols) > 1:
             raise ValueError(
-                "Se detectaron varias columnas vectoriales. "
-                f"Indica una con --feature_column. Columnas: {vector_cols}"
+                "Multiple vector columns detected. "
+                f"Specify one with --feature_column. Columns: {vector_cols}"
             )
 
-        # Fallback: columnas numéricas
+        # Fallback: numeric columns
         numeric_df = df.select_dtypes(include=[np.number])
 
         if numeric_df.shape[1] == 0:
             raise ValueError(
-                "No se encontraron features válidas. "
-                "Usa --feature_column con la columna de embeddings."
+                "No valid features found. "
+                "Use --feature_column with the embedding column."
             )
 
-        print("[WARNING] Usando columnas numéricas:", numeric_df.columns.tolist())
+        print("[WARNING] Using numeric columns:", numeric_df.columns.tolist())
         return numeric_df.values.astype(np.float32), y
 
     raise TypeError(f"Formato no soportado: {type(obj)}")
@@ -388,7 +433,7 @@ def train_vae_from_paths(
     if latent_dim >= input_dim:
         print(
             f"[WARNING] latent_dim={latent_dim} >= input_dim={input_dim}. "
-            "Para reducción real, usa latent_dim menor que input_dim."
+            "For actual reduction, use a latent_dim smaller than input_dim."
         )
 
     vae, encoder, decoder = build_vae(

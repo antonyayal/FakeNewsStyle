@@ -1,5 +1,47 @@
 # src/features/context_extractor.py
 # -*- coding: utf-8 -*-
+"""
+Context feature extractor (Source/Domain/Topic/Author + article age).
+
+Goal
+----
+This module builds a deterministic, untrained context representation per
+sample from metadata columns (no model weights, no training step) and saves
+it as a new PKL.
+
+Why this file exists
+--------------------
+- Source/Domain/Topic/Author are categorical, high-cardinality fields with no
+  natural numeric encoding -- feature hashing gives a fixed-size vector
+  without fitting a vocabulary.
+- Article age is a weak but cheap temporal signal when a date column exists.
+
+Outputs
+-------
+For each input PKL (train/val/test), creates an output PKL (dict payload,
+same schema as style_extractor.py) with:
+- X : np.ndarray [N, D] -- [source_emb..., domain_emb..., topic_emb...,
+  author_emb..., ctx_age_days, ctx_has_link, ctx_has_domain, ctx_has_source,
+  ctx_has_topic, ctx_has_author, ctx_has_date]
+- feature_names : list[str], stable order matching X's columns
+- ids, y (labels), meta (config snapshot + feature_dim)
+
+Expected input columns (configurable via ContextExtractorConfig)
+------------------------------------------------------------------
+- topic_column, source_column, link_column (required)
+- author_column, date_column (optional; if absent, ctx_has_author/
+  ctx_has_date stay 0 and those embeddings stay all-zero -- set the
+  corresponding *_dim to 0 rather than leaving dead dimensions in the
+  output when the corpus genuinely has no author/date metadata)
+
+Usage (example)
+---------------
+from pathlib import Path
+from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
+
+extractor = ContextExtractor(ContextExtractorConfig(source_dim=32, domain_dim=32))
+extractor.save_features_pkl(rows=df.to_dict(orient="records"), output_path=Path("out.pkl"))
+"""
 
 from __future__ import annotations
 
@@ -26,24 +68,24 @@ class ContextExtractorConfig:
     - topic_column: e.g. "Topic"
     - source_column: e.g. "Source"
     - link_column: e.g. "Link"
-    - author_column: optional (si existe)
-    - date_column: optional (si existe; para calcular edad)
+    - author_column: optional (if present in the corpus)
+    - date_column: optional (if present; used to compute article age)
 
     Embeddings:
-    - Se usa hash-embedding determinístico (feature hashing) para producir vectores
-      de dimensión fija SIN entrenamiento.
+    - Uses deterministic hash-embedding (feature hashing) to produce
+      fixed-size vectors with NO training.
 
-    Notas sobre edad:
-    - Si normalize_age=True y age_cap_days no es None:
+    Notes on age:
+    - If normalize_age=True and age_cap_days is not None:
         ctx_age_days = age_days / age_cap_days
-      quedando aproximadamente en [-1, 1].
-    - Si normalize_age=False:
-        ctx_age_days queda en días reales (cappeado si aplica).
+      landing roughly in [-1, 1].
+    - If normalize_age=False:
+        ctx_age_days stays in real days (capped if applicable).
     """
     topic_column: str = "Topic"
     source_column: str = "Source"
     link_column: str = "Link"
-    id_column: str = "Id"  # útil para ids si quieres guardarlos desde DF
+    id_column: str = "Id"  # useful for ids if you want to keep them from the DF
 
     author_column: Optional[str] = None         # e.g. "Author"
     date_column: Optional[str] = None           # e.g. "Date" / "Published" / "created_at"
@@ -55,16 +97,16 @@ class ContextExtractorConfig:
     author_dim: int = 16
 
     # Hashing behavior
-    n_hashes: int = 2          # 2–4 típico
-    signed: bool = True        # signed hashing reduce sesgo por colisiones
-    l2_normalize: bool = True  # normaliza cada sub-embedding
+    n_hashes: int = 2          # 2-4 typical
+    signed: bool = True        # signed hashing reduces collision bias
+    l2_normalize: bool = True  # normalizes each sub-embedding
 
     # Age calculation
-    reference_datetime_utc: Optional[datetime] = None  # si None, usa now UTC
-    age_cap_days: Optional[int] = 3650                 # cap 10 años
-    missing_age_value: float = -1.0                    # sin fecha / parse falla
+    reference_datetime_utc: Optional[datetime] = None  # if None, uses now UTC
+    age_cap_days: Optional[int] = 3650                 # cap at 10 years
+    missing_age_value: float = -1.0                    # no date / parse failed
 
-    # NUEVO: normalizar edad a [-1, 1] usando age_cap_days
+    # Normalize age to [-1, 1] using age_cap_days
     normalize_age: bool = True
 
     # Numeric safety
@@ -75,19 +117,19 @@ class ContextExtractor:
     """
     Context Feature Extractor.
 
-    Características extraídas:
-    - Dominio / Fuente:
-        - Source (medio) -> hash-embedding
-        - Domain del URL (extraído de Link) -> hash-embedding
-    - Autor:
-        - si hay columna de autor -> hash-embedding
-        - si no, heurística conservadora desde URL (/author/<name>/ o ?author=)
-    - Categoría temática (Topic) -> hash-embedding
-    - Tiempo:
-        - Edad de la noticia en días (si hay date_column), respecto a reference_datetime_utc
-        - opcionalmente normalizada a [-1, 1]
+    Extracted features:
+    - Domain / Source:
+        - Source (outlet) -> hash-embedding
+        - Domain from the URL (extracted from Link) -> hash-embedding
+    - Author:
+        - if an author column exists -> hash-embedding
+        - otherwise, a conservative URL heuristic (/author/<name>/ or ?author=)
+    - Topic category (Topic) -> hash-embedding
+    - Time:
+        - Article age in days (if date_column exists), relative to reference_datetime_utc
+        - optionally normalized to [-1, 1]
 
-    Output vector (orden fijo):
+    Output vector (fixed order):
       [source_emb..., domain_emb..., topic_emb..., author_emb..., age_days, flags...]
 
     Flags:
@@ -155,7 +197,7 @@ class ContextExtractor:
         top_vec = self._hash_embed(topic, c.topic_dim, field="topic")
         aut_vec = self._hash_embed(author, c.author_dim, field="author")
 
-        # Age days (ya sale normalizada si así se configura)
+        # Age days (already normalized if configured that way)
         age_days = self._age_in_days(row)
 
         # Build dict with stable keys
@@ -344,8 +386,8 @@ class ContextExtractor:
         log_name: str = "context_extractor.log",
     ) -> None:
         """
-        Convenience: recibe un pandas.DataFrame, extrae rows e ids (por Id),
-        y guarda un PKL estándar.
+        Convenience: takes a pandas.DataFrame, extracts rows and ids (via Id),
+        and saves a standard PKL.
         """
         rows = df.to_dict(orient="records")
         ids = None
@@ -425,10 +467,10 @@ class ContextExtractor:
 
     def _age_in_days(self, row: Dict[str, Any]) -> float:
         """
-        Regresa:
-        - edad normalizada a [-1, 1] si normalize_age=True y age_cap_days no es None
-        - edad en días (cappeada) si normalize_age=False
-        - missing_age_value si no hay fecha o falla el parseo
+        Returns:
+        - age normalized to [-1, 1] if normalize_age=True and age_cap_days is not None
+        - age in days (capped) if normalize_age=False
+        - missing_age_value if there's no date or parsing fails
         """
         c = self.config
         dc = c.date_column
@@ -451,12 +493,12 @@ class ContextExtractor:
         delta = ref - dt
         age = float(delta.total_seconds() / 86400.0)
 
-        # cap en días
+        # cap in days
         if c.age_cap_days is not None:
             cap = float(c.age_cap_days)
             age = max(min(age, cap), -cap)
 
-        # normalización opcional
+        # optional normalization
         if c.normalize_age:
             if c.age_cap_days is None or float(c.age_cap_days) <= 0.0:
                 raise ValueError(
@@ -559,8 +601,8 @@ class ContextExtractor:
 
 
 """
-Herramientas utilizadas:
-- python stdlib: urllib.parse (parseo de URL), datetime (cálculo de edad), hashlib (hash embedding), re (heurísticas)
-- numpy: construcción de vectores y normalización
-- feature hashing (hash embeddings) determinístico para categorías (Source/Domain/Topic/Author)
+Tools used:
+- python stdlib: urllib.parse (URL parsing), datetime (age calculation), hashlib (hash embedding), re (heuristics)
+- numpy: vector construction and normalization
+- feature hashing (hash embeddings), deterministic, for categoricals (Source/Domain/Topic/Author)
 """

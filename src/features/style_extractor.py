@@ -1,4 +1,46 @@
 # -*- coding: utf-8 -*-
+"""
+Style feature extractor (spaCy/textstat/wordfreq stylometry, Spanish).
+
+Goal
+----
+This module extracts ~35 stylometric features per sample -- readability,
+formality, syntactic complexity, lexical diversity, POS ratios, OOV rate,
+and punctuation/burstiness signals -- and saves them as a new PKL. These are
+the features that tend to separate fake vs. real news style, independent of
+semantic content.
+
+Why this file exists
+--------------------
+- spaCy/textstat/wordfreq are all optional dependencies: if spaCy's Spanish
+  model isn't installed, extraction falls back to a regex-only path
+  (_extract_without_spacy) instead of failing, at the cost of zeroing out
+  the POS/dependency-based features.
+- Feature values are normalized by type (ratios clipped to [0,1], tanh for
+  bounded scores, log1p for open-ended counts) so every branch feeds the
+  downstream VAE on a comparable scale.
+
+Outputs
+-------
+Unlike semantic_extractor.py/emotion_extractor.py (DataFrame output), this
+module saves a dict payload (same schema as context_extractor.py):
+- X : np.ndarray [N, D], feature_names : list[str] (stable order)
+- ids, y (labels), meta (config snapshot + feature_dim)
+
+Expected input
+--------------
+- A list of raw text strings (one per sample) passed to extract_batch/
+  save_features_pkl -- no specific source column name, the caller decides
+  which text column to read (see main.py's --style_text_column).
+
+Usage (example)
+---------------
+from pathlib import Path
+from src.features.style_extractor import StyleExtractor, StyleExtractorConfig
+
+extractor = StyleExtractor(StyleExtractorConfig(spacy_model="es_core_news_sm"))
+extractor.save_features_pkl(texts=texts, ids=ids, output_path=Path("out.pkl"))
+"""
 from __future__ import annotations
 
 import re
@@ -21,7 +63,7 @@ except Exception:  # pragma: no cover
     textstat = None  # type: ignore
 
 try:
-    # wordfreq es útil para "vocabulario" y OOV (calidad ortográfica aproximada)
+    # wordfreq is useful for "vocabulary" and OOV (approximate spelling quality)
     from wordfreq import zipf_frequency  # type: ignore
 except Exception:  # pragma: no cover
     zipf_frequency = None  # type: ignore
@@ -103,7 +145,7 @@ class StyleExtractorConfig:
     # Make numeric safe
     safe_numeric: bool = True
 
-    # NUEVO: normalización por tipo
+    # Feature-type normalization
     normalize_features: bool = True
 
 
@@ -111,19 +153,19 @@ class StyleExtractor:
     """
     Style Feature Extractor (Spanish).
 
-    Extrae features de estilo que suelen diferenciar fake vs real:
-    - Legibilidad (Flesch–Szigriszt / IFSZ aproximado)
-    - Formalidad (F-score de Heylighen & Dewaele)
-    - Complejidad sintáctica / estructura
-    - Léxico y diversidad (TTR + métricas robustas)
-    - Distribución POS (estilo gramatical)
-    - Calidad ortográfica aproximada (OOV por frecuencia léxica)
-    - Señales de estilo (punct, quotes, uppercase, alargamientos, etc.)
+    Extracts style features that tend to separate fake vs. real:
+    - Readability (approximate Flesch-Szigriszt / IFSZ)
+    - Formality (Heylighen & Dewaele F-score)
+    - Syntactic complexity / structure
+    - Lexicon and diversity (TTR + robust metrics)
+    - POS distribution (grammatical style)
+    - Approximate spelling quality (OOV by lexical frequency)
+    - Style signals (punct, quotes, uppercase, elongations, etc.)
 
-    Diseño:
-    - Input: texto (str)
-    - Output: vector np.ndarray + feature_names() estables
-    - Soporta export a PKL con ids para preservar alineación de filas.
+    Design:
+    - Input: text (str)
+    - Output: np.ndarray vector + stable feature_names()
+    - Supports PKL export with ids to preserve row alignment.
     """
 
     def __init__(self, config: StyleExtractorConfig = StyleExtractorConfig()):
@@ -584,16 +626,16 @@ class StyleExtractor:
         }
 
     # -------------------------
-    # Normalización por tipo
+    # Normalization by type
     # -------------------------
 
     def _normalize_feature_dict(self, feats: Dict[str, float]) -> Dict[str, float]:
         """
-        Normaliza por tipo:
-        - ratios/proporciones -> clip [0, 1]
-        - formalidad -> tanh(x / 100) en [-1, 1]
-        - ifsz -> tanh(x / 100) en [-1, 1]
-        - métricas positivas de tamaño/complejidad -> log1p(x)
+        Normalizes by type:
+        - ratios/proportions -> clip [0, 1]
+        - formality -> tanh(x / 100) in [-1, 1]
+        - ifsz -> tanh(x / 100) in [-1, 1]
+        - positive size/complexity metrics -> log1p(x)
         - herdans_c -> tanh(x / 5)
         - root_ttr -> log1p(x)
         """
@@ -755,10 +797,10 @@ class StyleExtractor:
 
 
 """
-Herramientas utilizadas:
-- spaCy: tokenización, segmentación en oraciones, POS tagging y dependencias.
-- textstat: conteos y aproximación de sílabas/oraciones/palabras para legibilidad.
-- wordfreq (zipf_frequency): proxy de OOV/rare words.
-- regex + heurísticas: señales de estilo.
-- numpy: vectores y estadísticas.
+Tools used:
+- spaCy: tokenization, sentence segmentation, POS tagging and dependencies.
+- textstat: syllable/sentence/word counts and approximation for readability.
+- wordfreq (zipf_frequency): OOV/rare-word proxy.
+- regex + heuristics: style signals.
+- numpy: vectors and statistics.
 """

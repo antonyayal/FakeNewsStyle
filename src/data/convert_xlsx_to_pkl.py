@@ -1,3 +1,25 @@
+# src/data/convert_xlsx_to_pkl.py
+# -*- coding: utf-8 -*-
+"""
+Corpus conversion: raw XLSX -> PKL.
+
+Goal
+----
+Convert every XLSX file in data/raw/ into a PKL with the same schema
+(one .pkl per .xlsx, same stem), so the rest of the pipeline reads a single,
+fast, consistent format instead of parsing Excel repeatedly.
+
+Usage (example)
+---------------
+from pathlib import Path
+from src.data.convert_xlsx_to_pkl import convert_folder_xlsx_to_pkl
+
+convert_folder_xlsx_to_pkl(
+    raw_dir=Path("data/raw"),
+    processed_dir=Path("data/01_corpus_pkl"),
+)
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,8 +33,8 @@ def convert_folder_xlsx_to_pkl(
     engine: str = "openpyxl",
 ) -> list[Path]:
     """
-    Convierte todos los XLSX en raw_dir a PKL en processed_dir.
-    Regresa la lista de archivos PKL generados.
+    Converts every XLSX in raw_dir to a PKL in processed_dir.
+    Returns the list of generated PKL files.
     """
     raw_dir = Path(raw_dir)
     processed_dir = Path(processed_dir)

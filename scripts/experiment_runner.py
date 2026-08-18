@@ -1,16 +1,17 @@
 # scripts/experiment_runner.py
 # -*- coding: utf-8 -*-
 """
-Mecánica compartida por orchestrator_phase1.py y orchestrator_phase2.py:
-lanzar main.py vía subprocess, capturar el results/{run_id}.json que escribe
-src/experiments/run_logger.py, y apendear una línea de resultado al JSON-lines
-centralizado de la fase -- con checkpointing/resume basado en run_key.
+Mechanics shared by orchestrator_phase1.py and orchestrator_phase2.py:
+launching main.py via subprocess, capturing the results/{run_id}.json that
+src/experiments/run_logger.py writes, and appending a result line to the
+phase's centralized JSON-lines -- with checkpointing/resume based on run_key.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import pickle
 import re
 import subprocess
 import sys
@@ -19,9 +20,48 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from experiment_config import BASE_DIR
+from experiment_config import BASE_DIR, FEATURES_RAW_DIR
 
 RESULTS_JSON_RE = re.compile(r"Experiment record saved:\s*(\S+\.json)")
+
+
+def _row_count(pkl_path: Path) -> int:
+    """Row count for either a DataFrame PKL (semantic/emotion, VAE latents)
+    or a dict-payload PKL (style/context raw features, {"num_samples": N, ...})."""
+    with open(pkl_path, "rb") as f:
+        obj = pickle.load(f)
+    if isinstance(obj, dict):
+        return int(obj["num_samples"])
+    return len(obj)
+
+
+def latent_cache_is_fresh(branch: str, dim: int, vae_latents_dir: Path) -> bool:
+    """True if vae_latents_dir/{branch}/latent{dim}/{split}.pkl exists AND its
+    row count matches the CURRENT data/03_features_raw/{branch}/{split}_{branch}.pkl
+    -- i.e. these cached VAE latents were trained on the corpus that's on disk
+    right now, not a stale snapshot from an earlier corpus revision.
+
+    Callers previously trusted file *existence* alone (ensure_vae_latents /
+    ensure_default_vae_latents), which silently reused latents trained on old
+    corpus sizes (e.g. 971-row snapshots from May) after the corpus was cut
+    down to 681 rows -- causing "Label length mismatch" crashes only once
+    merged against a freshly trained branch, or worse, silently training/
+    evaluating on stale data when every merged branch happened to be equally
+    stale."""
+    branch_dir = vae_latents_dir / branch / f"latent{dim}"
+    for split in ["train", "val", "test"]:
+        latent_pkl = branch_dir / f"{split}.pkl"
+        if not latent_pkl.exists():
+            return False
+
+        raw_pkl = FEATURES_RAW_DIR / branch / f"{split}_{branch}.pkl"
+        if not raw_pkl.exists():
+            continue  # nothing to validate against -- existence is all we can check
+
+        if _row_count(latent_pkl) != _row_count(raw_pkl):
+            return False
+
+    return True
 
 
 def load_ok_run_keys(jsonl_path: Path) -> set:
@@ -56,10 +96,18 @@ def append_jsonl(jsonl_path: Path, record: Dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
-def run_main_command(cmd: List[str]) -> Dict[str, Any]:
+def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[str, Any]:
     """Runs `python main.py ...` via subprocess, capturing stdout/stderr.
     Never raises on a failing run -- returns a dict describing what happened
-    so callers can log it and keep going with the rest of the batch."""
+    so callers can log it and keep going with the rest of the batch.
+
+    require_results_json controls whether a missing "Experiment record
+    saved: ..." line counts as a failure. That line is only printed by
+    main.py's --train_kan step (see src/experiments/run_logger.py), so
+    callers that only pass --run_vaes (ensure_vae_latents/resolve_kan_input
+    in orchestrator_phase1.py/orchestrator_phase2.py) must pass
+    require_results_json=False -- otherwise a successful VAE-only run
+    (returncode 0, no results JSON to find) is misreported as failed."""
 
     start = time.time()
     try:
@@ -95,7 +143,8 @@ def run_main_command(cmd: List[str]) -> Dict[str, Any]:
         tail = "\n".join(stderr.strip().splitlines()[-20:])
         error = f"main.py exited with code {returncode}. stderr tail:\n{tail}"
     elif results_json is None:
-        error = "main.py exited 0 but no 'Experiment record saved:' line found in stdout."
+        if require_results_json:
+            error = "main.py exited 0 but no 'Experiment record saved:' line found in stdout."
     else:
         results_path = Path(results_json)
         if not results_path.is_absolute():

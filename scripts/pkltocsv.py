@@ -1,9 +1,20 @@
+# scripts/pkltocsv.py
+"""
+One-off PKL -> CSV export for manual inspection (e.g. opening a corpus/
+feature split in Excel or a spreadsheet tool).
+
+Usage
+-----
+    python scripts/pkltocsv.py                          # exports data/02_corpus_clean/test.pkl
+    DATA_PATH=data/01_corpus_pkl/train.pkl python scripts/pkltocsv.py
+"""
+
 from pathlib import Path
 import os
 import pandas as pd
 
 # ---------------------------------
-# Base directory del proyecto
+# Project base directory
 # ---------------------------------
 BASE_DIR = Path(__file__).resolve().parents[1]
 

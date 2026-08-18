@@ -1,26 +1,25 @@
 # scripts/orchestrator_phase1.py
 # -*- coding: utf-8 -*-
 """
-Fase 1: sweep completo de combinaciones de expertos (los 15 subconjuntos no
-vacíos de {semantic, emotion, style, context}) x las 10 semillas fijas de
-experiment_config.SEEDS = 150 corridas.
+Phase 1: full sweep of expert combinations (the 15 non-empty subsets of
+{semantic, emotion, style, context}) x the 10 fixed seeds from
+experiment_config.SEEDS = 150 runs.
 
-VAE se entrena UNA sola vez (a las dimensiones latentes por defecto, para
-las 4 ramas) antes del sweep -- el entrenamiento de VAE es independiente por
-rama en main.py (no depende de qué otras ramas estén activas) y no tiene
-semilla configurable, así que reentrenarlo por corrida solo añadiría ruido
-no controlado a una comparación que se supone pareada por semilla. Cada una
-de las 150 corridas solo ejecuta `--merge_vae_latents --train_kan`, reusando
-esos latentes cacheados.
+The VAE trains ONCE (at the default latent dimensions, for all 4 branches)
+before the sweep -- VAE training is independent per branch in main.py
+(doesn't depend on which other branches are active) and has no configurable
+seed, so retraining it per run would only add uncontrolled noise to a
+comparison that's meant to be paired by seed. Each of the 150 runs only
+executes `--merge_vae_latents --train_kan`, reusing those cached latents.
 
-Checkpointing: antes de lanzar una corrida se revisa
-experiment_config.PHASE1_RESULTS_JSONL; si ya existe una línea con el mismo
-run_key y status "ok", se salta. Reanudar tras una caída es simplemente
-volver a correr este mismo script.
+Checkpointing: before launching a run, experiment_config.PHASE1_RESULTS_JSONL
+is checked; if a line with the same run_key and status "ok" already exists,
+it's skipped. Resuming after a crash is simply running this same script
+again.
 
-Uso:
-    python scripts/orchestrator_phase1.py              # corre las 150 (o las que falten)
-    python scripts/orchestrator_phase1.py --dry-run     # solo imprime el plan
+Usage:
+    python scripts/orchestrator_phase1.py              # runs the 150 (or whichever are missing)
+    python scripts/orchestrator_phase1.py --dry-run     # just prints the plan
 """
 
 from __future__ import annotations
@@ -45,6 +44,7 @@ from experiment_config import (  # noqa: E402
 )
 from experiment_runner import (  # noqa: E402
     execute_and_log,
+    latent_cache_is_fresh,
     load_ok_run_keys,
     python_executable,
     run_main_command,
@@ -73,10 +73,8 @@ def default_vae_latents_missing() -> List[str]:
     missing = []
     for branch in ALL_MODALITIES:
         dim = DEFAULT_LATENT_DIM[branch]
-        branch_dir = VAE_LATENTS_DIR / branch / f"latent{dim}"
-        for split in ["train", "val", "test"]:
-            if not (branch_dir / f"{split}.pkl").exists():
-                missing.append(f"{branch} (latent{dim}, {split}.pkl)")
+        if not latent_cache_is_fresh(branch, dim, VAE_LATENTS_DIR):
+            missing.append(f"{branch} (latent{dim}, missing or stale vs. current corpus)")
     return missing
 
 
@@ -90,10 +88,10 @@ def build_vae_prep_command() -> List[str]:
 def ensure_default_vae_latents(dry_run: bool) -> None:
     missing = default_vae_latents_missing()
     if not missing:
-        print("VAE latentes por defecto ya existen para las 4 ramas -- se reusan.")
+        print("Default VAE latents already exist for all 4 branches -- reusing them.")
         return
 
-    print("VAE latentes por defecto faltantes, se entrenarán una sola vez:")
+    print("Default VAE latents missing, will be trained once:")
     for m in missing:
         print(f"  - {m}")
 
@@ -101,13 +99,13 @@ def ensure_default_vae_latents(dry_run: bool) -> None:
     print(f"  $ {' '.join(cmd)}")
 
     if dry_run:
-        print("  (dry-run: no se ejecuta)")
+        print("  (dry-run: not executing)")
         return
 
-    outcome = run_main_command(cmd)
+    outcome = run_main_command(cmd, require_results_json=False)
     if outcome["error"] is not None:
-        raise RuntimeError(f"Fallo entrenando VAE por defecto: {outcome['error']}")
-    print(f"  OK en {outcome['elapsed_seconds']}s")
+        raise RuntimeError(f"Failed training default VAE: {outcome['error']}")
+    print(f"  OK in {outcome['elapsed_seconds']}s")
 
 
 def build_kan_command(combo: List[str], seed: int) -> List[str]:
@@ -129,19 +127,19 @@ def build_kan_command(combo: List[str], seed: int) -> List[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fase 1: sweep de combos de expertos x semillas")
-    parser.add_argument("--dry-run", action="store_true", help="Imprime el plan sin ejecutar nada")
+    parser = argparse.ArgumentParser(description="Phase 1: sweep of expert combos x seeds")
+    parser.add_argument("--dry-run", action="store_true", help="Print the plan without running anything")
     args = parser.parse_args()
 
     total = len(COMBOS) * len(SEEDS)
-    print(f"Fase 1: {len(COMBOS)} combos x {len(SEEDS)} semillas = {total} corridas")
-    print(f"Resultados: {PHASE1_RESULTS_JSONL}")
+    print(f"Phase 1: {len(COMBOS)} combos x {len(SEEDS)} seeds = {total} runs")
+    print(f"Results: {PHASE1_RESULTS_JSONL}")
 
     ensure_default_vae_latents(dry_run=args.dry_run)
 
     ok_keys = load_ok_run_keys(PHASE1_RESULTS_JSONL) if not args.dry_run else set()
     if ok_keys:
-        print(f"Reanudando: {len(ok_keys)}/{total} corridas ya completadas, se saltan.")
+        print(f"Resuming: {len(ok_keys)}/{total} runs already completed, skipping.")
 
     n_run = 0
     n_skip = 0
@@ -160,7 +158,7 @@ def main():
                 continue
 
             if key in ok_keys:
-                print(f"{label} SKIP (ya completada)")
+                print(f"{label} SKIP (already completed)")
                 n_skip += 1
                 continue
 
@@ -184,17 +182,17 @@ def main():
 
             if record["status"] == "ok":
                 n_run += 1
-                print(f"  OK en {record['elapsed_seconds']}s -- {record['results_json']}")
+                print(f"  OK in {record['elapsed_seconds']}s -- {record['results_json']}")
             else:
                 n_failed += 1
                 print(f"  FAILED -- {record['error']}")
 
     if args.dry_run:
-        print(f"\ndry-run: {total} corridas planeadas (no ejecutadas).")
+        print(f"\ndry-run: {total} runs planned (not executed).")
         return
 
-    print(f"\nFase 1 completa (esta invocación): {n_run} corridas nuevas, {n_skip} saltadas, {n_failed} fallidas.")
-    print(f"Total acumulado en {PHASE1_RESULTS_JSONL}: {len(load_ok_run_keys(PHASE1_RESULTS_JSONL))}/{total} ok.")
+    print(f"\nPhase 1 complete (this invocation): {n_run} new runs, {n_skip} skipped, {n_failed} failed.")
+    print(f"Total accumulated in {PHASE1_RESULTS_JSONL}: {len(load_ok_run_keys(PHASE1_RESULTS_JSONL))}/{total} ok.")
 
 
 if __name__ == "__main__":

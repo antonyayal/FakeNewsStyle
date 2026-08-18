@@ -1,4 +1,4 @@
-# scripts/inspect_features.py
+# scripts/inspect_pkl.py
 # =====================================================
 # Generic PRO Feature Inspector for FakeNewsStyle
 # Supports:
@@ -41,18 +41,18 @@ def safe_repr(x: Any, max_len: int = 300) -> str:
 def infer_embedding_cols(df: pd.DataFrame) -> List[str]:
     candidates: List[str] = []
 
-    # Prioridad explícita
+    # Explicit priority
     priority = ["sem_emb", "emo_emb", "style_emb", "ctx_emb"]
     for c in priority:
         if c in df.columns:
             candidates.append(c)
 
-    # Cualquier *_emb
+    # Any *_emb
     for c in df.columns:
         if c not in candidates and str(c).lower().endswith("_emb"):
             candidates.append(c)
 
-    # Verificación: columna de listas/vectores
+    # Verification: list/vector column
     final_cols: List[str] = []
     for c in candidates:
         series = df[c].dropna()
@@ -78,7 +78,7 @@ def infer_numeric_feature_cols(df: pd.DataFrame) -> List[str]:
 
 def build_matrix_from_dataframe(df: pd.DataFrame) -> Tuple[np.ndarray, List[str], Dict[str, Any]]:
     """
-    Devuelve:
+    Returns:
       X: np.ndarray [N, D]
       feature_names: list[str]
       aux_info: dict
@@ -89,7 +89,7 @@ def build_matrix_from_dataframe(df: pd.DataFrame) -> Tuple[np.ndarray, List[str]
         "numeric_feature_cols": [],
     }
 
-    # Caso 1: DataFrame con una o más columnas de embeddings (listas)
+    # Case 1: DataFrame with one or more embedding columns (lists)
     emb_cols = infer_embedding_cols(df)
     if emb_cols:
         aux_info["embedding_cols"] = emb_cols
@@ -107,7 +107,7 @@ def build_matrix_from_dataframe(df: pd.DataFrame) -> Tuple[np.ndarray, List[str]
         X = np.concatenate(blocks, axis=1) if len(blocks) > 1 else blocks[0]
         return X, names, aux_info
 
-    # Caso 2: DataFrame con columnas numéricas ya expandidas
+    # Case 2: DataFrame with already-expanded numeric columns
     num_cols = infer_numeric_feature_cols(df)
     if num_cols:
         aux_info["numeric_feature_cols"] = num_cols

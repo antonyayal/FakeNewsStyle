@@ -1,5 +1,55 @@
 # src/features/merge_raw_features_for_kan.py
 # -*- coding: utf-8 -*-
+"""
+Raw feature merger for the pre-VAE KAN baseline (main.py's --merge_raw_features).
+
+Goal
+----
+Concatenate the four per-branch raw feature PKLs (semantic/emotion/style/
+context) into one row-order-concatenated, column-aligned DataFrame per
+split, expanding list/vector columns into numbered columns and categorical
+columns into one-hot columns.
+
+Why this file exists
+--------------------
+- This is the WIRED-IN raw merger main.py actually calls -- not
+  src/features/feature_merger.py, which is Id-aligned with a dict-payload
+  output and sem_/emo_/sty_/ctx_ prefixes but is unused by main.py. Don't
+  assume feature_merger.py is live without checking main.py first.
+- Row-order concat (not Id-aligned) means it assumes all four branches'
+  PKLs for a given split were extracted from the same corpus split in the
+  same row order -- true for every path main.py's pipeline currently
+  supports.
+- object_to_numeric_df() handles every raw-feature schema in this repo:
+  DataFrame with scalar/vector/categorical columns (semantic/emotion), and
+  dict payloads with arrays (style/context).
+- align_columns() reindexes train/val/test to the union of one-hot columns
+  seen across all three splits (fill_value=0.0), so a category present in
+  train but absent in test doesn't shift column positions.
+
+Outputs
+-------
+output_dir/{split}.pkl -- one DataFrame per split with {branch}_{feature}
+columns plus "label" (1 = Fake, 0 = True/Real, see normalize_label_series()).
+
+Usage (example)
+---------------
+from pathlib import Path
+from src.features.merge_raw_features_for_kan import merge_all_splits
+
+merge_all_splits(
+    feature_dirs={
+        "semantic": Path("data/03_features_raw/semantic"),
+        "emotion": Path("data/03_features_raw/emotion"),
+        "style": Path("data/03_features_raw/style"),
+        "context": Path("data/03_features_raw/context"),
+    },
+    output_dir=Path("data/04_features_merged"),
+)
+
+Also runnable standalone: `python -m src.features.merge_raw_features_for_kan`
+(see main() below for the full CLI flag list).
+"""
 
 from __future__ import annotations
 

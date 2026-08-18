@@ -1,5 +1,47 @@
 # src/models/kan.py
 # -*- coding: utf-8 -*-
+"""
+KAN classifier (PyTorch) trained on the merged VAE latents.
+
+Goal
+----
+Fuse the per-branch VAE latents (data/06_vae_latents_merged/{split}.pkl)
+into a single binary fake/real classifier and evaluate it.
+
+Why this file exists
+--------------------
+- KANLayer uses a fixed RBF basis (linspace(-3, 3, num_basis), shared
+  learnable width) rather than splines -- it's not a literal
+  Kolmogorov-Arnold spline network, just named after the architecture family.
+- KANClassifier = (KANLayer -> LayerNorm -> SiLU -> Dropout) x2 -> Linear(1),
+  trained with BCEWithLogitsLoss/AdamW and early stopping.
+- Label convention: 1 = Fake, 0 = True/Real (see normalize_labels()) --
+  consistent across this file, merge_raw_features_for_kan.py, and
+  src/evaluation/metrics.py.
+
+Outputs
+-------
+train_kan_from_pkls() writes, under output_dir:
+- best_kan_model.pt (best val-loss checkpoint)
+- predictions.pkl ({split: {"y_true", "y_prob"}} for train/val/test)
+and returns a dict with num_parameters, training_time_seconds, epochs_run,
+best_model_path, predictions_path -- consumed by main.py's --train_kan step
+to compute metrics and log the run via src/experiments/run_logger.py.
+
+Usage (example)
+---------------
+from src.models.kan import train_kan_from_pkls
+
+train_kan_from_pkls(
+    train_pkl="data/06_vae_latents_merged/train.pkl",
+    val_pkl="data/06_vae_latents_merged/val.pkl",
+    test_pkl="data/06_vae_latents_merged/test.pkl",
+    num_basis=16, hidden_dim=64, output_dir="data/07_kan_runs/merged",
+)
+
+Also runnable standalone: `python -m src.models.kan --train_pkl ...`
+(see main() below for the full CLI flag list).
+"""
 
 from __future__ import annotations
 

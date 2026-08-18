@@ -1,15 +1,15 @@
 # scripts/aggregate_results.py
 # -*- coding: utf-8 -*-
 """
-Agrega los resultados de un JSON-lines de orquestación (Fase 1 o Fase 2):
-agrupa por configuración, calcula media +/- desviación estándar de cada
-métrica sobre las corridas (una por semilla), ordena por la media de la
-métrica de ranking (F1 por defecto), y aplica un test de Wilcoxon
-signed-rank pareado por semilla entre las configuraciones más cercanas al
-top para verificar significancia estadística.
+Aggregates the results of an orchestration JSON-lines file (Phase 1 or
+Phase 2): groups by configuration, computes mean +/- standard deviation of
+each metric across runs (one per seed), sorts by the mean of the ranking
+metric (F1 by default), and applies a Wilcoxon signed-rank test paired by
+seed between the configurations closest to the top to check statistical
+significance.
 
-Reusable como módulo (orchestrator_phase2.py lo importa para decidir el
-ganador de cada grupo de hiperparámetros) y como CLI:
+Reusable as a module (orchestrator_phase2.py imports it to decide the
+winner of each hyperparameter group) and as a CLI:
 
     python scripts/aggregate_results.py --input results/orchestrator_phase1.jsonl --group-by extractors
     python scripts/aggregate_results.py --input results/orchestrator_phase2.jsonl --group-by candidate
@@ -77,7 +77,7 @@ def _group_key_column(df: pd.DataFrame, group_by: str) -> pd.Series:
     elif group_by == "candidate":
         return df["group"].astype(str) + "::" + df["candidate_label"].astype(str)
     else:
-        raise ValueError(f"group_by desconocido: {group_by!r} (usar 'extractors' o 'candidate')")
+        raise ValueError(f"Unknown group_by: {group_by!r} (use 'extractors' or 'candidate')")
 
 
 def aggregate_by_config(df: pd.DataFrame, group_by: str, metric: str = RANKING_METRIC) -> pd.DataFrame:
@@ -102,8 +102,8 @@ def aggregate_by_config(df: pd.DataFrame, group_by: str, metric: str = RANKING_M
         for _, row in agg.iterrows():
             if row[count_col] < n_expected:
                 warnings.warn(
-                    f"Config '{row['config']}' tiene {int(row[count_col])}/{n_expected} "
-                    f"corridas exitosas -- media/std calculadas sobre menos semillas."
+                    f"Config '{row['config']}' has {int(row[count_col])}/{n_expected} "
+                    f"successful runs -- mean/std computed over fewer seeds."
                 )
 
     sort_col = f"{metric}_mean"
@@ -138,13 +138,13 @@ def pairwise_wilcoxon(
 
         common_seeds = sorted(set(series_a.index) & set(series_b.index))
         if len(common_seeds) < 2:
-            warnings.warn(f"'{a}' vs '{b}': menos de 2 semillas en común, se salta Wilcoxon.")
+            warnings.warn(f"'{a}' vs '{b}': fewer than 2 common seeds, skipping Wilcoxon.")
             continue
 
         if set(series_a.index) != set(series_b.index):
             warnings.warn(
-                f"'{a}' vs '{b}': conjuntos de semillas distintos, se usa la intersección "
-                f"({len(common_seeds)} semillas)."
+                f"'{a}' vs '{b}': different seed sets, using the intersection "
+                f"({len(common_seeds)} seeds)."
             )
 
         x = series_a.loc[common_seeds].values
@@ -152,7 +152,7 @@ def pairwise_wilcoxon(
 
         if np.allclose(x, y):
             rows.append({"config_a": a, "config_b": b, "n_seeds": len(common_seeds),
-                         "statistic": 0.0, "p_value": 1.0, "note": "valores idénticos"})
+                         "statistic": 0.0, "p_value": 1.0, "note": "identical values"})
             continue
 
         try:
@@ -177,14 +177,14 @@ def _print_table(df: pd.DataFrame) -> None:
 
 def report(ranking: pd.DataFrame, wilcoxon_df: pd.DataFrame, metric: str = RANKING_METRIC, top_k: int = 3) -> None:
     if ranking.empty:
-        print("Sin corridas exitosas -- nada que reportar.")
+        print("No successful runs -- nothing to report.")
         return
 
     display_cols = ["config"] + [
         c for c in ranking.columns
         if c.startswith((f"{metric}_", "accuracy_", "roc_auc_", "mcc_")) and c != "config"
     ]
-    print("\n=== Ranking por configuración (ordenado por %s medio) ===" % metric)
+    print("\n=== Ranking by configuration (sorted by mean %s) ===" % metric)
     _print_table(ranking[display_cols] if display_cols else ranking)
 
     print(f"\n=== Top {top_k} ===")
@@ -193,11 +193,11 @@ def report(ranking: pd.DataFrame, wilcoxon_df: pd.DataFrame, metric: str = RANKI
               f"+/- {row[f'{metric}_std']:.4f}, n={int(row[f'{metric}_count'])})")
 
     if not wilcoxon_df.empty:
-        print("\n=== Wilcoxon signed-rank (pareado por semilla), pares consecutivos del top ===")
+        print("\n=== Wilcoxon signed-rank (paired by seed), consecutive pairs from the top ===")
         _print_table(wilcoxon_df)
         for _, row in wilcoxon_df.iterrows():
             if row["p_value"] is not None:
-                sig = "significativo (p<0.05)" if row["p_value"] < 0.05 else "no significativo"
+                sig = "significant (p<0.05)" if row["p_value"] < 0.05 else "not significant"
                 print(f"  {row['config_a']} vs {row['config_b']}: p={row['p_value']:.4f} ({sig})")
 
 
@@ -210,21 +210,21 @@ def _extract_active_extractors(ranking: pd.DataFrame, df: pd.DataFrame, top_k: i
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Agrega y rankea resultados de un JSON-lines de orquestación")
-    parser.add_argument("--input", required=True, help="Path al JSON-lines (Fase 1 o Fase 2)")
+    parser = argparse.ArgumentParser(description="Aggregates and ranks results from an orchestration JSON-lines file")
+    parser.add_argument("--input", required=True, help="Path to the JSON-lines (Phase 1 or Phase 2)")
     parser.add_argument("--group-by", choices=["extractors", "candidate"], required=True)
-    parser.add_argument("--metric", default=RANKING_METRIC, help=f"Métrica de ranking (default: {RANKING_METRIC})")
-    parser.add_argument("--top-n-wilcoxon", type=int, default=4, help="Cuántas configs del top comparar por pares")
+    parser.add_argument("--metric", default=RANKING_METRIC, help=f"Ranking metric (default: {RANKING_METRIC})")
+    parser.add_argument("--top-n-wilcoxon", type=int, default=4, help="How many top configs to compare pairwise")
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--output-winners", nargs="?", const=str(PHASE1_WINNERS_JSON), default=None,
-                         help="Si se pasa (y --group-by extractors), escribe las top-k combos a este JSON "
-                              f"(sin valor, usa el default: {PHASE1_WINNERS_JSON}; formato consumido por "
+                         help="If passed (with --group-by extractors), writes the top-k combos to this JSON "
+                              f"(with no value, uses the default: {PHASE1_WINNERS_JSON}; format consumed by "
                               "orchestrator_phase2.py --winners)")
     args = parser.parse_args()
 
     df = load_runs(Path(args.input))
     if df.empty:
-        print(f"Sin corridas exitosas en {args.input}.")
+        print(f"No successful runs in {args.input}.")
         return
 
     ranking = aggregate_by_config(df, args.group_by, metric=args.metric)
@@ -233,13 +233,13 @@ def main():
 
     if args.output_winners:
         if args.group_by != "extractors":
-            parser.error("--output-winners solo tiene sentido con --group-by extractors")
+            parser.error("--output-winners only makes sense with --group-by extractors")
         winners = _extract_active_extractors(ranking, df, args.top_k)
         out_path = Path(args.output_winners)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"winners": [list(w) for w in winners], "metric": args.metric}, f, indent=2, ensure_ascii=False)
-        print(f"\nTop {args.top_k} combos guardadas en: {out_path}")
+        print(f"\nTop {args.top_k} combos saved to: {out_path}")
 
 
 if __name__ == "__main__":
