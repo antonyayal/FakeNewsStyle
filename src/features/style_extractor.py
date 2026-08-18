@@ -702,7 +702,7 @@ class StyleExtractor:
                     continue
                 d = 0
                 cur = token
-                while cur.head is not cur and d < 200:
+                while cur.head.i != cur.i and d < 200:
                     d += 1
                     cur = cur.head
                 depths.append(d)
