@@ -1,0 +1,87 @@
+{
+  "metric": "f1",
+  "configs": {
+    "semantic_emotion_style_context": {
+      "active_extractors": [
+        "semantic",
+        "emotion",
+        "style",
+        "context"
+      ],
+      "resolved_hyperparams": {
+        "latent": {
+          "semantic": 64,
+          "emotion": 8,
+          "style": 8,
+          "context": 32
+        },
+        "kan_num_basis": 8,
+        "kan_hidden_dim": 16,
+        "kan_dropout": 0.2,
+        "kan_epochs": 100,
+        "kan_patience": 15,
+        "kan_batch_size": 32,
+        "kan_lr": 0.001,
+        "kan_weight_decay": 0.001,
+        "vae_beta": 1.0,
+        "vae_dropout": 0.3
+      },
+      "per_fold": {
+        "0": {
+          "mean": 0.8640943145530816,
+          "std": 0.01338319828086246,
+          "min": 0.8404907975460123,
+          "max": 0.8859934853420195,
+          "count": 10.0
+        },
+        "1": {
+          "mean": 0.890315597971678,
+          "std": 0.00868884576777005,
+          "min": 0.8786885245901639,
+          "max": 0.9032258064516129,
+          "count": 10.0
+        },
+        "2": {
+          "mean": 0.838957042211819,
+          "std": 0.015543587730159375,
+          "min": 0.8122866894197952,
+          "max": 0.8709677419354839,
+          "count": 10.0
+        },
+        "3": {
+          "mean": 0.854596013733061,
+          "std": 0.021068447571420092,
+          "min": 0.8131868131868132,
+          "max": 0.8837209302325582,
+          "count": 10.0
+        },
+        "4": {
+          "mean": 0.8637214653934686,
+          "std": 0.005617185473581145,
+          "min": 0.8551724137931035,
+          "max": 0.8712871287128713,
+          "count": 10.0
+        }
+      },
+      "global": {
+        "f1_mean": 0.8623368867726217,
+        "f1_std": 0.021518048470230935,
+        "f1_min": 0.8122866894197952,
+        "f1_max": 0.9032258064516129,
+        "n_runs": 50,
+        "n_folds": 5
+      },
+      "phase2_original_split": {
+        "accuracy_mean": 0.86993006993007,
+        "accuracy_std": 0.00601109415301989,
+        "accuracy_count": 10,
+        "f1_mean": 0.8678190776391835,
+        "f1_std": 0.0046550771887487585,
+        "f1_count": 10,
+        "roc_auc_mean": 0.9356364703436977,
+        "roc_auc_std": 0.007679227017401943,
+        "roc_auc_count": 10
+      }
+    }
+  }
+}
