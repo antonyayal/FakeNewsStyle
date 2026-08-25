@@ -217,7 +217,7 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="summary">
-    <h2>Tabla resumen</h2>
+    <h2>Tabla resumen — parámetros de cada corrida</h2>
     <div class="controls">
       <input type="text" id="table-filter" placeholder="Filtrar por run_id, extractores o archivo...">
       <label>Umbral de alerta de gap (train−test): <input type="number" id="gap-threshold" value="0.15" step="0.01" min="0" max="1"></label>
@@ -226,6 +226,16 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
       <table class="summary">
         <thead><tr id="table-head-row"></tr></thead>
         <tbody id="table-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="metrics-summary">
+    <h2>Tabla de métricas — resultados de cada corrida</h2>
+    <div style="overflow-x:auto;">
+      <table class="summary">
+        <thead><tr id="table-head-row-2"></tr></thead>
+        <tbody id="table-body-2"></tbody>
       </table>
     </div>
   </section>
@@ -274,7 +284,6 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
 // =====================================================
 let allRuns = [];
 let excludedEntries = [];
-let sortState = { key: 'timestamp', asc: true };
 let filterText = '';
 let gapThreshold = 0.15;
 
@@ -292,6 +301,7 @@ function flattenRecord(record, sourceLabel) {
   const epochs = record.epochs || {};
   const kanHyperparams = record.kan_hyperparams || {};
   const compute = record.compute || {};
+  const corpus = inferCorpus(record.paths || {});
 
   return {
     run_id: String(record.run_id),
@@ -299,6 +309,8 @@ function flattenRecord(record, sourceLabel) {
     git_commit: record.git_commit ?? null,
     active_extractors: Array.isArray(record.active_extractors) ? record.active_extractors : [],
     combo: (Array.isArray(record.active_extractors) ? record.active_extractors.join('+') : '') || '(none)',
+    corpus_label: corpus.label,
+    corpus_fold: corpus.fold,
     latent_dims: record.latent_dims || {},
     epochs: { kan_epochs_run: epochs.kan_epochs_run ?? null, kan_epochs_requested: epochs.kan_epochs_requested ?? null,
               vae_epochs_requested: epochs.vae_epochs_requested ?? null },
@@ -527,6 +539,35 @@ function extractorBadges(list) {
   return list.map(m => `<span class="badge ${KNOWN_MODALITIES.has(m) ? 'badge-' + m : 'badge-other'}">${escapeHtml(m)}</span>`).join('');
 }
 
+// The run record itself doesn't carry an explicit corpus_mode/fold field
+// (see src/experiments/run_logger.py) -- infer it from kan_output_dir instead,
+// which main.py always routes through a fold-tagged path (".../fold{k}/...")
+// whenever --corpus_mode kfold is used (see main.py's _fold_aware_dir()), and
+// leaves fold-free otherwise (data/07_kan_runs/merged or a custom dir).
+//
+// The total fold count (--kfold_n) isn't logged as its own field either, but
+// every fold-tagged path encodes it as ".../seed{split_seed}_n{kfold_n}/fold{k}/...".
+// Some orchestrator scripts (e.g. scripts/orchestrator_phase3.py) override
+// kan_output_dir with a custom path that drops that "_n{N}" segment, so as a
+// fallback we also check paths.vae_model_dirs, which main.py never lets a
+// script override independently of --corpus_mode -- it always keeps the
+// "_n{N}" segment.
+function inferCorpus(paths) {
+  paths = paths || {};
+  const kanDir = paths.kan_output_dir || '';
+  const foldMatch = kanDir.match(/fold(\d+)/);
+  if (!foldMatch) return { label: 'Completo', fold: null, total: null };
+  const fold = Number(foldMatch[1]);
+
+  const candidates = [kanDir, ...Object.values(paths.vae_model_dirs || {})];
+  let total = null;
+  for (const c of candidates) {
+    const m = (c || '').match(/_n(\d+)\/fold\d+/);
+    if (m) { total = Number(m[1]); break; }
+  }
+  return { label: total ? `Fold ${fold} / ${total}` : `Fold ${fold}`, fold, total };
+}
+
 // =====================================================
 // Narrative summary
 // =====================================================
@@ -573,109 +614,186 @@ function renderNarrative() {
 }
 
 // =====================================================
-// Summary table
+// Summary tables: params table + metrics table
 // =====================================================
-const TABLE_COLUMNS = [
+function fmtParamsList(obj, exclude = []) {
+  if (!obj) return '—';
+  const entries = Object.entries(obj).filter(([k]) => !exclude.includes(k));
+  if (!entries.length) return '—';
+  return entries.map(([k, v]) => `<span style="color:var(--text-dim)">${escapeHtml(k)}</span>=${escapeHtml(String(v))}`).join(', ');
+}
+
+function fmtLatentDims(ld) {
+  if (!ld || !Object.keys(ld).length) return '—';
+  return Object.entries(ld).map(([k, v]) => `<span style="color:var(--text-dim)">${escapeHtml(k)}</span>=${v}`).join(', ');
+}
+
+function degenerateTagHtml(r) {
+  const tag = detectDegenerate(r);
+  return tag ? `<span class="degenerate-tag">⚠ colapsó ("${tag}")</span>` : '';
+}
+
+// Columns for "Tabla resumen": identity + the parameters that were set for the run
+// (what varied between runs), not the resulting metrics.
+const PARAM_COLUMNS = [
   { key: 'run_id', label: 'run_id', sort: (r) => r.run_id,
-    tip: 'Identificador único de la corrida (timestamp + hash corto).' },
+    tip: 'Identificador único de la corrida (timestamp + hash corto); coincide con el nombre del archivo results/{run_id}.json leído.',
+    render: (r) => `<code>${escapeHtml(r.run_id)}</code>${degenerateTagHtml(r)}` },
   { key: 'timestamp', label: 'Fecha/hora', sort: (r) => r.timestamp || '',
-    tip: 'Fecha y hora en que terminó el entrenamiento de esta corrida.' },
+    tip: 'Fecha y hora en que terminó el entrenamiento de esta corrida.',
+    render: (r) => fmtTs(r.timestamp) },
   { key: 'combo', label: 'Extractores activos', sort: (r) => r.combo,
-    tip: 'Qué ramas de features (semantic / emotion / style / context) alimentaron al KAN en esta corrida.' },
-  { key: 'epochs', label: 'Épocas KAN (run/pedidas)', sort: (r) => r.epochs.kan_epochs_run,
-    tip: 'Épocas que realmente corrió el KAN vs. las que se pidieron. Si son distintas, se activó el early stopping.' },
+    tip: 'Qué ramas de features (semantic / emotion / style / context) alimentaron al KAN en esta corrida.',
+    render: (r) => extractorBadges(r.active_extractors) },
+  { key: 'corpus', label: 'Corpus', sort: (r) => r.corpus_fold === null ? -1 : r.corpus_fold,
+    tip: 'Corpus con el que se ejecutó: el split original completo (train/development/test fijo) o "Fold N / Total" de --corpus_mode kfold, donde N es el índice de este fold (--kfold_index) y Total es cuántos folds se generaron (--kfold_n). Inferido de las rutas kan_output_dir / vae_model_dirs de la corrida.',
+    render: (r) => r.corpus_fold === null
+      ? '<span class="badge badge-other">Completo</span>'
+      : `<span class="badge badge-other">${escapeHtml(r.corpus_label)}</span>` },
   { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
-    tip: 'Accuracy sobre el split de test (datos nunca vistos durante el entrenamiento).' },
-  { key: 'gap', label: 'Gap (train−test)', sort: (r) => overfitGap(r),
-    tip: 'Accuracy de train menos accuracy de test. Un gap grande indica sobreajuste: el modelo memorizó el train y generaliza mal.' },
+    tip: 'Accuracy sobre el split de test (datos nunca vistos durante el entrenamiento).',
+    render: (r) => fmtNum(r.test_accuracy) },
   { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
-    tip: 'F1-score de la clase Fake en test (media armónica de precision y recall).' },
-  { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc,
-    tip: 'Área bajo la curva ROC en test: qué tan bien separa el modelo Fake de True, para cualquier umbral.' },
+    tip: 'F1-score de la clase Fake en test (media armónica de precision y recall).',
+    render: (r) => fmtNum(r.test_f1) },
+  { key: 'latent_dims', label: 'Latent dims (VAE)', sort: (r) => JSON.stringify(r.latent_dims || {}),
+    tip: 'Dimensión del espacio latente configurada para el VAE de cada rama activa.',
+    render: (r) => fmtLatentDims(r.latent_dims) },
+  { key: 'vae_hyperparams', label: 'VAE hyperparams', sort: (r) => JSON.stringify(r.vae_hyperparams || {}),
+    tip: 'Hiperparámetros usados al entrenar los VAEs (batch size, learning rate, beta, dropout).',
+    render: (r) => fmtParamsList(r.vae_hyperparams) },
+  { key: 'kan_hyperparams', label: 'KAN hyperparams', sort: (r) => JSON.stringify(r.kan_hyperparams || {}),
+    tip: 'Hiperparámetros del clasificador KAN (arquitectura y entrenamiento). La seed se muestra aparte.',
+    render: (r) => fmtParamsList(r.kan_hyperparams, ['seed']) },
+  { key: 'epochs_requested', label: 'Épocas pedidas (VAE/KAN)', sort: (r) => r.epochs.kan_epochs_requested,
+    tip: 'Épocas máximas configuradas para el entrenamiento del VAE y del KAN (el KAN puede parar antes por early stopping — ver Tabla de métricas).',
+    render: (r) => `vae=${r.epochs.vae_epochs_requested ?? '—'}, kan=${r.epochs.kan_epochs_requested ?? '—'}` },
   { key: 'seed', label: 'Seed', sort: (r) => r.seed,
-    tip: 'Semilla aleatoria del entrenamiento del KAN. Corridas idénticas con distinta seed muestran cuánta varianza hay por puro azar de inicialización.' },
-  { key: 'training_time', label: 'Tiempo entren. (s)', sort: (r) => r.training_time_seconds,
-    tip: 'Tiempo de entrenamiento del KAN en segundos (no incluye extracción de features ni entrenamiento de VAEs).' },
-  { key: 'num_parameters', label: '# Parámetros', sort: (r) => r.num_parameters,
-    tip: 'Número total de parámetros entrenables del clasificador KAN: indica su capacidad/tamaño.' },
-  { key: 'source_file', label: 'Archivo origen', sort: (r) => r.source_file,
-    tip: 'Nombre del archivo JSON (o entrada dentro de un JSON consolidado) del que se cargó esta corrida.' },
+    tip: 'Semilla aleatoria del entrenamiento del KAN. Corridas idénticas con distinta seed muestran cuánta varianza hay por puro azar de inicialización.',
+    render: (r) => r.seed ?? '—' },
 ];
 
-function filteredSortedRuns() {
+// Columns for "Tabla de métricas": results of each run.
+const METRIC_COLUMNS = [
+  { key: 'run_id', label: 'run_id', sort: (r) => r.run_id,
+    tip: 'Identificador único de la corrida.',
+    render: (r) => `<code>${escapeHtml(r.run_id)}</code>${degenerateTagHtml(r)}` },
+  { key: 'combo', label: 'Extractores activos', sort: (r) => r.combo,
+    tip: 'Qué ramas de features alimentaron al KAN en esta corrida.',
+    render: (r) => extractorBadges(r.active_extractors) },
+  { key: 'epochs', label: 'Épocas KAN (run/pedidas)', sort: (r) => r.epochs.kan_epochs_run,
+    tip: 'Épocas que realmente corrió el KAN vs. las que se pidieron. Si son distintas, se activó el early stopping.',
+    render: (r) => {
+      const epRun = r.epochs.kan_epochs_run, epReq = r.epochs.kan_epochs_requested;
+      const early = (epRun !== null && epReq !== null && epRun < epReq);
+      return (epRun === null) ? '—' : `<span class="${early ? 'epoch-early' : ''}">${epRun} / ${epReq ?? '—'}</span>`;
+    } },
+  { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
+    tip: 'Accuracy sobre el split de test (datos nunca vistos durante el entrenamiento).',
+    render: (r) => fmtNum(r.test_accuracy) },
+  { key: 'gap', label: 'Gap (train−test)', sort: (r) => overfitGap(r),
+    tip: 'Accuracy de train menos accuracy de test. Un gap grande indica sobreajuste: el modelo memorizó el train y generaliza mal.',
+    render: (r) => {
+      const gap = overfitGap(r);
+      return gap === null ? '—' : `<span class="${Math.abs(gap) >= gapThreshold ? 'gap-warn' : ''}">${gap.toFixed(4)}</span>`;
+    } },
+  { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
+    tip: 'F1-score de la clase Fake en test (media armónica de precision y recall).',
+    render: (r) => fmtNum(r.test_f1) },
+  { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc,
+    tip: 'Área bajo la curva ROC en test: qué tan bien separa el modelo Fake de True, para cualquier umbral.',
+    render: (r) => fmtNum(r.test_roc_auc) },
+  { key: 'test_log_loss', label: 'Test log-loss', sort: (r) => r.test_log_loss,
+    tip: 'Pérdida logarítmica en test: penaliza más fuerte las predicciones confiadas y equivocadas.',
+    render: (r) => fmtNum(r.test_log_loss) },
+  { key: 'test_ece', label: 'Test ECE', sort: (r) => r.test_ece,
+    tip: 'Error de calibración esperado en test: qué tan bien reflejan las probabilidades predichas la confianza real del modelo.',
+    render: (r) => fmtNum(r.test_ece) },
+  { key: 'test_brier_score', label: 'Test Brier', sort: (r) => r.test_brier_score,
+    tip: 'Brier score en test: error cuadrático medio entre probabilidad predicha y resultado real.',
+    render: (r) => fmtNum(r.test_brier_score) },
+  { key: 'seed', label: 'Seed', sort: (r) => r.seed,
+    tip: 'Semilla aleatoria del entrenamiento del KAN.',
+    render: (r) => r.seed ?? '—' },
+  { key: 'training_time', label: 'Tiempo entren. (s)', sort: (r) => r.training_time_seconds,
+    tip: 'Tiempo de entrenamiento del KAN en segundos (no incluye extracción de features ni entrenamiento de VAEs).',
+    render: (r) => r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) : '—' },
+  { key: 'num_parameters', label: '# Parámetros', sort: (r) => r.num_parameters,
+    tip: 'Número total de parámetros entrenables del clasificador KAN: indica su capacidad/tamaño.',
+    render: (r) => r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—' },
+];
+
+let paramSortState = { key: 'timestamp', asc: true };
+let metricSortState = { key: 'timestamp', asc: true };
+
+function filteredSortedRuns(columns, state) {
   let rows = allRuns;
   if (filterText) {
     const q = filterText.toLowerCase();
     rows = rows.filter(r =>
       r.run_id.toLowerCase().includes(q) ||
       r.combo.toLowerCase().includes(q) ||
+      r.corpus_label.toLowerCase().includes(q) ||
       (r.source_file || '').toLowerCase().includes(q)
     );
   }
-  const col = TABLE_COLUMNS.find(c => c.key === sortState.key);
+  const col = columns.find(c => c.key === state.key) || columns[0];
   rows = [...rows].sort((a, b) => {
     let va = col.sort(a), vb = col.sort(b);
     if (va === null || va === undefined) va = -Infinity;
     if (vb === null || vb === undefined) vb = -Infinity;
-    if (va < vb) return sortState.asc ? -1 : 1;
-    if (va > vb) return sortState.asc ? 1 : -1;
+    if (va < vb) return state.asc ? -1 : 1;
+    if (va > vb) return state.asc ? 1 : -1;
     return 0;
   });
   return rows;
 }
 
-function renderTable() {
-  const theadRow = document.getElementById('table-head-row');
-  theadRow.innerHTML = TABLE_COLUMNS.map(c => {
-    const arrow = sortState.key === c.key ? (sortState.asc ? '▲' : '▼') : '';
+function renderGenericTable(columns, state, headId, bodyId, rerenderFn) {
+  const theadRow = document.getElementById(headId);
+  theadRow.innerHTML = columns.map(c => {
+    const arrow = state.key === c.key ? (state.asc ? '▲' : '▼') : '';
     const tipAttr = c.tip ? ` data-tooltip="${c.tip.replace(/"/g, '&quot;')}"` : '';
     return `<th data-key="${c.key}"${tipAttr}>${c.label}<span class="arrow">${arrow}</span></th>`;
   }).join('');
   theadRow.querySelectorAll('th').forEach(th => {
     th.addEventListener('click', () => {
       const key = th.dataset.key;
-      if (sortState.key === key) sortState.asc = !sortState.asc;
-      else { sortState.key = key; sortState.asc = true; }
-      renderTable();
+      if (state.key === key) state.asc = !state.asc;
+      else { state.key = key; state.asc = true; }
+      rerenderFn();
     });
   });
 
-  const rows = filteredSortedRuns();
-  const tbody = document.getElementById('table-body');
+  const rows = filteredSortedRuns(columns, state);
+  const tbody = document.getElementById(bodyId);
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="${TABLE_COLUMNS.length}" class="empty-msg">Sin corridas que coincidan con el filtro.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${columns.length}" class="empty-msg">Sin corridas que coincidan con el filtro.</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const epRun = r.epochs.kan_epochs_run, epReq = r.epochs.kan_epochs_requested;
-    const early = (epRun !== null && epReq !== null && epRun < epReq);
-    const epochCell = (epRun === null) ? '—' : `<span class="${early ? 'epoch-early' : ''}">${epRun} / ${epReq ?? '—'}</span>`;
-    const gap = overfitGap(r);
-    const gapCell = gap === null ? '—' : `<span class="${Math.abs(gap) >= gapThreshold ? 'gap-warn' : ''}">${gap.toFixed(4)}</span>`;
-    const degenerate = detectDegenerate(r);
-    const rowClass = degenerate ? 'degenerate-row' : '';
-    const degenerateTag = degenerate ? `<span class="degenerate-tag">⚠ colapsó (predice siempre "${degenerate}")</span>` : '';
-    return `<tr class="${rowClass}">
-      <td><code>${escapeHtml(r.run_id)}</code>${degenerateTag}</td>
-      <td>${fmtTs(r.timestamp)}</td>
-      <td>${extractorBadges(r.active_extractors)}</td>
-      <td>${epochCell}</td>
-      <td>${fmtNum(r.test_accuracy)}</td>
-      <td>${gapCell}</td>
-      <td>${fmtNum(r.test_f1)}</td>
-      <td>${fmtNum(r.test_roc_auc)}</td>
-      <td>${r.seed ?? '—'}</td>
-      <td>${r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) : '—'}</td>
-      <td>${r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—'}</td>
-      <td style="color:var(--text-dim); font-size:0.8rem;">${escapeHtml(r.source_file)}</td>
-    </tr>`;
+    const rowClass = detectDegenerate(r) ? 'degenerate-row' : '';
+    const cells = columns.map(c => `<td>${c.render(r)}</td>`).join('');
+    return `<tr class="${rowClass}">${cells}</tr>`;
   }).join('');
 }
 
-document.getElementById('table-filter').addEventListener('input', (e) => { filterText = e.target.value; renderTable(); });
+function renderParamsTable() {
+  renderGenericTable(PARAM_COLUMNS, paramSortState, 'table-head-row', 'table-body', renderParamsTable);
+}
+
+function renderMetricsTable() {
+  renderGenericTable(METRIC_COLUMNS, metricSortState, 'table-head-row-2', 'table-body-2', renderMetricsTable);
+}
+
+document.getElementById('table-filter').addEventListener('input', (e) => {
+  filterText = e.target.value;
+  renderParamsTable();
+  renderMetricsTable();
+});
 document.getElementById('gap-threshold').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value);
-  if (!Number.isNaN(v)) { gapThreshold = v; renderTable(); }
+  if (!Number.isNaN(v)) { gapThreshold = v; renderMetricsTable(); }
 });
 
 // =====================================================
@@ -877,7 +995,8 @@ function renderCards() {
 // =====================================================
 function renderAll() {
   renderNarrative();
-  renderTable();
+  renderParamsTable();
+  renderMetricsTable();
   renderSeedStability();
   renderBarChart();
   renderHeatmap();
