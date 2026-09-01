@@ -180,7 +180,7 @@ To exclude a modality entirely (not just skip re-extracting it), add `--exclude_
 
 ---
 
-### 🔹 Corpus mode: original split vs. k-fold
+### 🔹 Corpus mode: original split vs. k-fold vs. source-disjoint
 
 ```bash
 # Default: the fixed train/development/test split from data/01_corpus_pkl/
@@ -188,10 +188,26 @@ python main.py --train_kan
 
 # One fold of a 5-fold repartition, as train/val/test for this run
 python main.py --corpus_mode kfold --kfold_n 5 --kfold_index 0 --train_kan
+
+# One fold of a 5-fold source-disjoint repartition (no outlet spans train/val/test)
+python main.py --corpus_mode source_disjoint --source_split_n 5 --source_split_index 0 --train_kan
 ```
 
 * **`original`** (default) uses the fixed split produced once by `--prepare_corpus`. One split, one train/test pair — this is what almost every experiment in `results/` uses.
 * **`kfold`** pools train+development+test and repartitions them into `--kfold_n` (default 5) label-stratified folds (**not** source-disjoint — see "Known Limitations & Caveats" below), cached under `data/01_corpus_pkl_cv/seed{S}_n{N}/fold{k}/`. `--kfold_index` picks which of those folds this invocation trains/evaluates on. It's used to check whether a config's result holds up across different data partitions, not to fix the source-leakage issue — that's still present in every fold. Kfold mode routes every downstream stage's output to a parallel `*_cv` tree, so it never collides with the original split's artifacts. See `main.py`'s module docstring and `src/data/kfold_corpus.py` for the full mechanics.
+* **`source_disjoint`** pools the same way, but repartitions into `--source_split_n` (default 5) folds such that no `Source` (news outlet) value ever appears in more than one of a fold's train/val/test (`StratifiedGroupKFold` + `GroupShuffleSplit` grouped by `Source`), cached under `data/01_corpus_pkl_source_cv/seed{S}_n{N}/fold{k}/`. `--source_split_index` picks the fold. This is the direct fix for the leakage `kfold` does not address — see "Known Limitations & Caveats" below and `src/data/source_split_corpus.py`. Outlet group sizes in this corpus are highly uneven, so split sizes/label balance won't match the clean ~70/30 of `original`/`kfold`; that's the accepted cost of removing the leakage at its source. Driven by `scripts/orchestrator_phase5.py` (Phase 5) — `kfold` mode is driven by `scripts/orchestrator_phase4.py` (Phase 4) instead.
+
+---
+
+### 🔹 Experiment orchestration (Phase 1–5)
+
+`scripts/orchestrator_phase{1..5}.py` drive `main.py` through a 5-phase search over extractor combinations and hyperparameters, with checkpointing/resume and centralized JSON-lines logging (`results/orchestrator_phase{1..5}.jsonl`). Every phase uses the same 5 fixed seeds (`scripts/experiment_config.SEEDS`) for paired comparisons across configs. Full CLI usage (dry-run, resume, output schemas) is in `scripts/README_experiments.md`.
+
+1. **Phase 1 — latent dimension per extractor, in isolation.** Each of the 4 branches (semantic/emotion/style/context) runs alone (the other 3 `--exclude_*`), sweeping only its own latent dimension. Ranks *dimensions within the same branch* (a single-extractor model isn't expected to compete with a combo — that's Phase 2's job) to fix each branch's best-2 dimensions before any combination is tried. → `results/phase1_top.json`.
+2. **Phase 2 — extractor combinations.** The 15 non-empty subsets of {semantic, emotion, style, context}, each active branch at its Phase 1 rank-1 dimension (the top-2 aren't crossed). Pooled together with Phase 1's 8 single-branch results into one ranking → top 5 extractor+dimension configs. → `results/phase2_top.json`.
+3. **Phase 3 — VAE regularization + KAN hyperparameters, fused.** For each of Phase 2's top 5, a one-knob-at-a-time sweep (16 variants: a shared baseline plus one candidate per non-default `vae_beta`, `vae_dropout`, `kan_num_basis`, `kan_hidden_dim`, `kan_weight_decay`) → top 5 fully-resolved configs. `kan_lr`/`kan_batch_size` aren't swept — a prior sweep found the default wins both. → `results/phase3_top.json`.
+4. **Phase 4 — robustness to partition.** Phase 3's top 5 revalidated across 5 stratified k-folds (`--corpus_mode kfold`) — checks whether performance holds up across different train/val/test row partitions, on top of the seed-to-seed variance already measured. Explores nothing new. → `results/phase4_per_fold.json` + `results/phase4_top.json` (single global winner).
+5. **Phase 5 — robustness to leakage by outlet.** The *same* top 5 from Phase 3 (an independent branch, not chained after Phase 4) revalidated across 5 source-disjoint folds (`--corpus_mode source_disjoint`) — the definitive test of the Source/Domain leakage described in "Known Limitations & Caveats" below. → `results/phase5_per_fold.json` + `results/phase5_top.json`.
 
 ---
 
@@ -248,7 +264,7 @@ Compiles every `results/*.json` (one per `--train_kan` run) into `reports/experi
 
 `viewer/index.html` is a self-contained, 100% client-side comparison report — no Python, no server. Open it directly in a browser (double-click, or `file://`) and drag in one or more `results/*.json` files (or a single consolidated `{"runs": [...]}` file). Everything is parsed and rendered locally.
 
-It shows a sortable/filterable summary table (params + metrics), an automatic narrative summary, overfitting/calibration charts, seed-stability stats, and per-run detail cards. The summary table includes a **Corpus** column showing which corpus a run used — `Completo` (fixed original split) or `Fold N / Total` (`--corpus_mode kfold`, index and total fold count) — inferred from the run's `paths.kan_output_dir` / `paths.vae_model_dirs`, since `results/*.json` doesn't log `corpus_mode` as its own field.
+It shows a single summary table with **Parameters**/**Metrics** tabs (switching tabs swaps the column set without reloading the page), an automatic narrative summary, and overfitting/calibration charts. The summary table includes a **Corpus** column showing which corpus a run used — `Full` (fixed original split, gray), `Fold N/Total (normal)` (`--corpus_mode kfold`, cyan), or `Fold N/Total (disjoint)` (`--corpus_mode source_disjoint`, red — the leakage test) — inferred from the run's `paths.kan_output_dir` / `paths.vae_model_dirs`, since `results/*.json` doesn't log `corpus_mode` as its own field; telling `kfold` apart from `source_disjoint` specifically relies on `vae_model_dirs` resolving to `models/vae_cv/...` vs `models/vae_source_cv/...`.
 
 ---
 
@@ -322,9 +338,15 @@ reports; Topic and article age carry essentially no signal on their own.
 Results and discussion involving `context` or aggregate F1 should note this
 explicitly, since a meaningful share of it reflects source classification
 rather than fake-news style detection. A source-disjoint re-split (no
-outlet appearing in both train and test) would give a cleaner read but has
-not been run yet, and would also affect the `semantic`/`emotion`/`style`
-branches, not just `context`.
+outlet appearing in both train and test) would give a cleaner read on this
+across every branch, not just `context` — `--corpus_mode source_disjoint`
+(see "Corpus mode" above and `src/data/source_split_corpus.py`) and
+`scripts/orchestrator_phase5.py` (Phase 5) implement this; as of this
+writing the experiment plan has just been redesigned (5 phases, 5 fixed
+seeds — see "Experiment orchestration" above) and the previous run's
+results were archived (`results_old/`), so Phase 5 hasn't been run yet
+against the new plan's Phase 3 winning config (`results/phase3_top.json`,
+once Phases 1–3 complete).
 
 ---
 

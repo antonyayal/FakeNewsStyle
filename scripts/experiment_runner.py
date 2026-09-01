@@ -1,10 +1,14 @@
 # scripts/experiment_runner.py
 # -*- coding: utf-8 -*-
 """
-Mechanics shared by orchestrator_phase1.py and orchestrator_phase2.py:
-launching main.py via subprocess, capturing the results/{run_id}.json that
-src/experiments/run_logger.py writes, and appending a result line to the
-phase's centralized JSON-lines -- with checkpointing/resume based on run_key.
+Mechanics shared by orchestrator_phase{1..5}.py: launching main.py via
+subprocess, capturing the results/{run_id}.json that src/experiments/
+run_logger.py writes, appending a result line to the phase's centralized
+JSON-lines (with checkpointing/resume based on run_key), and building the
+VAE latents each phase's KAN runs read from -- either the shared default
+cache (ensure_vae_latents) or an isolated per-(beta, dropout) one merged
+manually (resolve_kan_input / merge_latents_manual), for candidates whose
+vae_beta/vae_dropout aren't main.py's defaults.
 """
 
 from __future__ import annotations
@@ -20,7 +24,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from experiment_config import BASE_DIR, FEATURES_RAW_DIR
+import pandas as pd
+
+from experiment_config import (
+    ALL_MODALITIES,
+    BASE_DIR,
+    DEFAULT_LATENT_DIM,
+    FEATURES_RAW_DIR,
+    VAE_LATENTS_DIR,
+)
+
+DEFAULT_VAE_BETA = 1.0
+DEFAULT_VAE_DROPOUT = 0.1
 
 RESULTS_JSON_RE = re.compile(r"Experiment record saved:\s*(\S+\.json)")
 
@@ -199,3 +214,143 @@ def execute_and_log(
 
 def python_executable() -> str:
     return sys.executable
+
+
+def ensure_vae_latents(active_extractors: List[str], dims: Dict[str, int], dry_run: bool) -> None:
+    """Default-beta/dropout path: reuses the shared cache at VAE_LATENTS_DIR,
+    training only what's missing for this (active_extractors, dims) preset.
+    Used by Phase 1 (one branch at a time) and Phase 2 (combos)."""
+    missing = [
+        f"{branch} (latent{dims[branch]}, missing or stale vs. current corpus)"
+        for branch in active_extractors
+        if not latent_cache_is_fresh(branch, dims[branch], VAE_LATENTS_DIR)
+    ]
+
+    if not missing:
+        return
+
+    print(f"    Missing VAE latents for this preset: {missing}")
+    cmd = [python_executable(), "main.py", "--run_vaes"]
+    for branch in ALL_MODALITIES:
+        if branch not in active_extractors:
+            cmd.append(f"--exclude_{branch}")
+        cmd += [f"--{branch}_latent_dim", str(dims.get(branch, DEFAULT_LATENT_DIM[branch]))]
+    print(f"    $ {' '.join(cmd)}")
+
+    if dry_run:
+        print("    (dry-run: not executing)")
+        return
+
+    outcome = run_main_command(cmd, require_results_json=False)
+    if outcome["error"] is not None:
+        raise RuntimeError(f"Failed training VAE for {active_extractors} @ {dims}: {outcome['error']}")
+    print(f"    OK in {outcome['elapsed_seconds']}s")
+
+
+def is_default_vae_reg(
+    effective: Dict[str, Any],
+    default_beta: float = DEFAULT_VAE_BETA,
+    default_dropout: float = DEFAULT_VAE_DROPOUT,
+) -> bool:
+    return effective["vae_beta"] == default_beta and effective["vae_dropout"] == default_dropout
+
+
+def merge_latents_manual(
+    active_extractors: List[str], latent_dirs: Dict[str, Path], out_dir: Path
+) -> Dict[str, Path]:
+    """Mirrors main.py's Step 9 (--merge_vae_latents) column-prefixing logic
+    (same {branch}_ prefix convention, same label handling), but reads from
+    arbitrary latent_dirs instead of the hardcoded data/05_vae_latents/ path
+    -- needed for VAE beta/dropout candidates that main.py can't merge on
+    its own."""
+    out_paths = {}
+    for split in ["train", "val", "test"]:
+        dfs = []
+        labels = None
+        for branch in active_extractors:
+            df = pd.read_pickle(latent_dirs[branch] / f"{split}.pkl")
+            if "label" in df.columns:
+                current_labels = df["label"].reset_index(drop=True)
+                if labels is None:
+                    labels = current_labels
+                df = df.drop(columns=["label"])
+            df = df.reset_index(drop=True)
+            df.columns = [c if str(c).startswith(f"{branch}_") else f"{branch}_{c}" for c in df.columns]
+            dfs.append(df)
+
+        merged_df = pd.concat(dfs, axis=1)
+        if labels is not None:
+            merged_df["label"] = labels.values
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{split}.pkl"
+        merged_df.to_pickle(out_path)
+        out_paths[split] = out_path
+
+    return out_paths
+
+
+def resolve_kan_input(
+    combo: List[str],
+    config_label_: str,
+    variant_label: str,
+    effective: Dict[str, Any],
+    vae_data_base_dir: Path,
+    vae_model_base_dir: Path,
+    merged_base_dir: Path,
+    dry_run: bool,
+) -> Optional[Dict[str, Path]]:
+    """Decides how a candidate's KAN input is produced. Returns None when
+    (vae_beta, vae_dropout) match main.py's defaults -- callers should then
+    pass --merge_vae_latents and let main.py read the shared cache (after
+    ensure_vae_latents makes sure this latent preset exists in it). Returns
+    a {split: path} dict when they don't -- an isolated VAE was trained (if
+    missing) under vae_data_base_dir/vae_model_base_dir and manually merged
+    into merged_base_dir, and callers should point --train_kan at those
+    paths directly instead of --merge_vae_latents."""
+
+    if is_default_vae_reg(effective):
+        ensure_vae_latents(combo, effective["latent"], dry_run=dry_run)
+        return None
+
+    tag = f"beta{effective['vae_beta']}_drop{effective['vae_dropout']}"
+    vae_data_dir = vae_data_base_dir / config_label_ / tag
+    vae_model_dir = vae_model_base_dir / config_label_ / tag
+    merged_dir = merged_base_dir / config_label_ / variant_label
+
+    latent_dirs = {branch: vae_data_dir / branch / f"latent{effective['latent'][branch]}" for branch in combo}
+    missing = [
+        branch for branch in combo
+        if not latent_cache_is_fresh(branch, effective["latent"][branch], vae_data_dir)
+    ]
+
+    if missing:
+        print(f"    Missing isolated VAE (beta={effective['vae_beta']}, dropout={effective['vae_dropout']}): {missing}")
+        cmd = [python_executable(), "main.py", "--run_vaes"]
+        for branch in ALL_MODALITIES:
+            if branch not in combo:
+                cmd.append(f"--exclude_{branch}")
+            cmd += [f"--{branch}_latent_dim", str(effective["latent"].get(branch, DEFAULT_LATENT_DIM[branch]))]
+        cmd += [
+            "--vae_beta", str(effective["vae_beta"]),
+            "--vae_dropout", str(effective["vae_dropout"]),
+            "--vae_data_output_dir", str(vae_data_dir.relative_to(BASE_DIR)),
+            "--vae_model_output_dir", str(vae_model_dir.relative_to(BASE_DIR)),
+        ]
+        print(f"    $ {' '.join(cmd)}")
+
+        if dry_run:
+            print("    (dry-run: not executing)")
+        else:
+            outcome = run_main_command(cmd, require_results_json=False)
+            if outcome["error"] is not None:
+                raise RuntimeError(
+                    f"Failed training isolated VAE for {combo} "
+                    f"@ beta={effective['vae_beta']} dropout={effective['vae_dropout']}: {outcome['error']}"
+                )
+            print(f"    OK in {outcome['elapsed_seconds']}s")
+
+    if dry_run:
+        return {s: merged_dir / f"{s}.pkl" for s in ["train", "val", "test"]}
+
+    return merge_latents_manual(combo, latent_dirs, merged_dir)

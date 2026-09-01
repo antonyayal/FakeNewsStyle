@@ -1,18 +1,19 @@
 # scripts/aggregate_results.py
 # -*- coding: utf-8 -*-
 """
-Aggregates the results of an orchestration JSON-lines file (Phase 1 or
-Phase 2): groups by configuration, computes mean +/- standard deviation of
+Aggregates the results of an orchestration JSON-lines file (any of the 5
+phases): groups by configuration, computes mean +/- standard deviation of
 each metric across runs (one per seed), sorts by the mean of the ranking
 metric (F1 by default), and applies a Wilcoxon signed-rank test paired by
 seed between the configurations closest to the top to check statistical
 significance.
 
-Reusable as a module (orchestrator_phase2.py imports it to decide the
-winner of each hyperparameter group) and as a CLI:
+Reusable as a module (orchestrator_phase{1,2,3}.py import it to build each
+phase's ranking) and as a CLI:
 
-    python scripts/aggregate_results.py --input results/orchestrator_phase1.jsonl --group-by extractors
-    python scripts/aggregate_results.py --input results/orchestrator_phase2.jsonl --group-by candidate
+    python scripts/aggregate_results.py --input results/orchestrator_phase1.jsonl --group-by branch_dim
+    python scripts/aggregate_results.py --input results/orchestrator_phase2.jsonl --group-by extractors
+    python scripts/aggregate_results.py --input results/orchestrator_phase3.jsonl --group-by candidate
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ import json
 import sys
 import warnings
 from pathlib import Path
-from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ from scipy.stats import wilcoxon
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from experiment_config import PHASE1_WINNERS_JSON, RANKING_METRIC, SEEDS  # noqa: E402
+from experiment_config import RANKING_METRIC, SEEDS  # noqa: E402
 
 METRIC_COLUMNS = [
     "accuracy", "balanced_accuracy", "precision", "recall", "specificity", "f1",
@@ -76,8 +76,10 @@ def _group_key_column(df: pd.DataFrame, group_by: str) -> pd.Series:
         return df["active_extractors"].apply(lambda combo: "+".join(combo))
     elif group_by == "candidate":
         return df["group"].astype(str) + "::" + df["candidate_label"].astype(str)
+    elif group_by == "branch_dim":
+        return df["branch"].astype(str) + "::dim" + df["dim"].astype(str)
     else:
-        raise ValueError(f"Unknown group_by: {group_by!r} (use 'extractors' or 'candidate')")
+        raise ValueError(f"Unknown group_by: {group_by!r} (use 'extractors', 'candidate', or 'branch_dim')")
 
 
 def aggregate_by_config(df: pd.DataFrame, group_by: str, metric: str = RANKING_METRIC) -> pd.DataFrame:
@@ -201,25 +203,13 @@ def report(ranking: pd.DataFrame, wilcoxon_df: pd.DataFrame, metric: str = RANKI
                 print(f"  {row['config_a']} vs {row['config_b']}: p={row['p_value']:.4f} ({sig})")
 
 
-def _extract_active_extractors(ranking: pd.DataFrame, df: pd.DataFrame, top_k: int) -> List[List[str]]:
-    winners = []
-    for config in ranking["config"].head(top_k):
-        match = df[df["active_extractors"].apply(lambda c: "+".join(c)) == config]
-        winners.append(match.iloc[0]["active_extractors"])
-    return winners
-
-
 def main():
     parser = argparse.ArgumentParser(description="Aggregates and ranks results from an orchestration JSON-lines file")
-    parser.add_argument("--input", required=True, help="Path to the JSON-lines (Phase 1 or Phase 2)")
-    parser.add_argument("--group-by", choices=["extractors", "candidate"], required=True)
+    parser.add_argument("--input", required=True, help="Path to the JSON-lines (any of the 5 phases)")
+    parser.add_argument("--group-by", choices=["extractors", "candidate", "branch_dim"], required=True)
     parser.add_argument("--metric", default=RANKING_METRIC, help=f"Ranking metric (default: {RANKING_METRIC})")
     parser.add_argument("--top-n-wilcoxon", type=int, default=4, help="How many top configs to compare pairwise")
     parser.add_argument("--top-k", type=int, default=3)
-    parser.add_argument("--output-winners", nargs="?", const=str(PHASE1_WINNERS_JSON), default=None,
-                         help="If passed (with --group-by extractors), writes the top-k combos to this JSON "
-                              f"(with no value, uses the default: {PHASE1_WINNERS_JSON}; format consumed by "
-                              "orchestrator_phase2.py --winners)")
     args = parser.parse_args()
 
     df = load_runs(Path(args.input))
@@ -230,16 +220,6 @@ def main():
     ranking = aggregate_by_config(df, args.group_by, metric=args.metric)
     wilcoxon_df = pairwise_wilcoxon(df, args.group_by, ranking, top_n=args.top_n_wilcoxon, metric=args.metric)
     report(ranking, wilcoxon_df, metric=args.metric, top_k=args.top_k)
-
-    if args.output_winners:
-        if args.group_by != "extractors":
-            parser.error("--output-winners only makes sense with --group-by extractors")
-        winners = _extract_active_extractors(ranking, df, args.top_k)
-        out_path = Path(args.output_winners)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump({"winners": [list(w) for w in winners], "metric": args.metric}, f, indent=2, ensure_ascii=False)
-        print(f"\nTop {args.top_k} combos saved to: {out_path}")
 
 
 if __name__ == "__main__":

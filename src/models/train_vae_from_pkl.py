@@ -386,6 +386,7 @@ def train_vae_from_paths(
     epochs=100,
     batch_size=32,
     learning_rate=1e-3,
+    patience=10,
     output_data_dir="data/05_vae_latents",
     output_model_dir="models/vae",
     feature_name="feature",
@@ -453,7 +454,7 @@ def train_vae_from_paths(
     callbacks = [
         keras.callbacks.EarlyStopping(
             monitor="val_loss" if X_val is not None else "loss",
-            patience=10,
+            patience=int(patience),
             restore_best_weights=True,
         ),
         keras.callbacks.ModelCheckpoint(
@@ -543,6 +544,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument("--patience", type=int, default=10)
 
     parser.add_argument("--output_data_dir", default="data/05_vae_latents")
     parser.add_argument("--output_model_dir", default="models/vae")
@@ -564,6 +566,7 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        patience=args.patience,
         output_data_dir=args.output_data_dir,
         output_model_dir=args.output_model_dir,
         feature_name=args.feature_name,

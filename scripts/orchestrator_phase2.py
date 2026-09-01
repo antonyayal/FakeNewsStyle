@@ -1,459 +1,243 @@
 # scripts/orchestrator_phase2.py
 # -*- coding: utf-8 -*-
 """
-Phase 2: for each of the 3 winning configurations from Phase 1, runs 5 sweep
-groups in a fixed sequential order -- each group is aggregated with
-aggregate_results before generating the next one's runs, so the full plan is
-NOT known ahead of time (it's decided at runtime):
+Phase 2: extractor combinations -- the 15 non-empty subsets of {semantic,
+emotion, style, context} x the 5 fixed seeds from experiment_config.SEEDS =
+75 runs. Each active branch uses its rank-1 latent dimension from Phase 1
+(results/phase1_top.json) -- Phase 1's top-2 per branch are NOT crossed
+here, only the single best dimension per branch is used for every combo.
 
-  (a)  latent space          (--{branch}_latent_dim, active branches only)
-  (a2) VAE regularization    (--vae_beta / --vae_dropout -- see DEFAULT_VAE_REG
-                               in experiment_config.py; needed because a
-                               historical run with low beta scored higher
-                               than any Phase 1 combo)
-  (b)  KAN "inputs"          (--kan_num_basis -- there's no separate
-                               input_dim flag; the KAN's real input is the
-                               sum of the active latent dims, already
-                               covered by (a))
-  (c)  internal layers/nodes (--kan_hidden_dim)
-  (d)  training parameters   (--kan_lr / --kan_batch_size / --kan_weight_decay)
+The VAE for each active branch (at its Phase-1-winning dim) trains ONCE via
+experiment_runner.ensure_vae_latents and is reused across the 15 combos that
+include it and their 5 seeds each.
 
-Each candidate value runs with the 10 fixed seeds from experiment_config.SEEDS.
-Checkpointing/resume identical to Phase 1, over experiment_config.PHASE2_RESULTS_JSONL.
-
-Note on (a2): main.py's --merge_vae_latents always reads from the fixed path
-data/05_vae_latents/{branch}/latent{dim}/ (hardcoded, ignores
---vae_data_output_dir), so any candidate with a beta/dropout other than
-main.py's default (see DEFAULT_VAE_REG) is trained in an isolated directory
-(PHASE2_VAE_DATA_DIR) and merged manually in Python (same pattern as
-scripts/run_full_stack_sweep.py), pointing --train_kan at those PKLs via
---kan_train_pkl/--kan_val_pkl/--kan_test_pkl. Candidates matching the default
-keep reusing the normal shared cache.
+Ranking pool for the final top 5: the 15 combo results here, PLUS the 8
+single-branch results already run in Phase 1 (top-2 x 4 branches) -- those
+aren't re-run, their raw per-seed rows are pulled straight from
+PHASE1_RESULTS_JSONL and pooled into the same ranking.
 
 Usage:
-    python scripts/orchestrator_phase2.py                       # uses results/phase1_top3.json
-    python scripts/orchestrator_phase2.py --winners path.json
-    python scripts/orchestrator_phase2.py --configs '[["semantic","emotion"], ["semantic","style","context"]]'
-    python scripts/orchestrator_phase2.py --dry-run
+    python scripts/orchestrator_phase2.py --run
+    python scripts/orchestrator_phase2.py --run --dry-run
+    python scripts/orchestrator_phase2.py --summary
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
-import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from aggregate_results import aggregate_by_config, load_runs, pairwise_wilcoxon, report  # noqa: E402
+from aggregate_results import aggregate_by_config, load_runs  # noqa: E402
 from experiment_config import (  # noqa: E402
     ALL_MODALITIES,
     BASE_DIR,
-    DEFAULT_LATENT_DIM,
-    DEFAULT_VAE_REG,
-    FIXED_KAN_BASELINE,
-    KAN_HIDDEN_DIM_CANDIDATES,
-    KAN_NUM_BASIS_CANDIDATES,
     KAN_RUNS_DIR,
-    KAN_TRAINING_CANDIDATES,
-    LATENT_DIM_CANDIDATES,
-    PHASE1_WINNERS_JSON,
+    PHASE1_RESULTS_JSONL,
+    PHASE1_TOP_JSON,
     PHASE2_RESULTS_JSONL,
-    PHASE2_VAE_DATA_DIR,
-    PHASE2_VAE_MERGED_DIR,
-    PHASE2_VAE_MODEL_DIR,
+    PHASE2_TOP_JSON,
     RANKING_METRIC,
     SEEDS,
-    VAE_LATENTS_DIR,
-    VAE_REG_CANDIDATES,
 )
 from experiment_runner import (  # noqa: E402
+    ensure_vae_latents,
     execute_and_log,
-    latent_cache_is_fresh,
     load_ok_run_keys,
     python_executable,
-    run_main_command,
 )
 
-DEFAULT_KAN_ARCH = {"kan_num_basis": 16, "kan_hidden_dim": 64}  # main.py's own defaults
+
+def all_nonempty_combos(modalities: List[str]) -> List[List[str]]:
+    combos = []
+    for r in range(1, len(modalities) + 1):
+        combos.extend(list(c) for c in itertools.combinations(modalities, r))
+    return combos
 
 
-def config_label(combo: List[str]) -> str:
-    return "_".join(m for m in ALL_MODALITIES if m in combo)
+COMBOS = all_nonempty_combos(ALL_MODALITIES)
 
 
-def initial_resolved() -> Dict[str, Any]:
-    resolved = {"latent": dict(DEFAULT_LATENT_DIM)}
-    resolved.update(DEFAULT_KAN_ARCH)
-    resolved.update(FIXED_KAN_BASELINE)
-    resolved.update(DEFAULT_VAE_REG)
-    return resolved
+def combo_label(combo: List[str]) -> str:
+    return "_".join(combo)
 
 
-def is_default_vae_reg(effective: Dict[str, Any]) -> bool:
-    return (
-        effective["vae_beta"] == DEFAULT_VAE_REG["vae_beta"]
-        and effective["vae_dropout"] == DEFAULT_VAE_REG["vae_dropout"]
-    )
+def run_key_for(combo: List[str], seed: int) -> str:
+    return f"{combo_label(combo)}__seed{seed}"
 
 
-def ensure_vae_latents(active_extractors: List[str], dims: Dict[str, int], dry_run: bool) -> None:
-    """Default-beta/dropout path: reuses the shared cache at
-    VAE_LATENTS_DIR, training only what's missing for this latent preset."""
-    missing = [
-        f"{branch} (latent{dims[branch]}, missing or stale vs. current corpus)"
-        for branch in active_extractors
-        if not latent_cache_is_fresh(branch, dims[branch], VAE_LATENTS_DIR)
-    ]
-
-    if not missing:
-        return
-
-    print(f"    Missing VAE latents for this preset: {missing}")
-    cmd = [python_executable(), "main.py", "--run_vaes"]
-    for branch in ALL_MODALITIES:
-        if branch not in active_extractors:
-            cmd.append(f"--exclude_{branch}")
-        cmd += [f"--{branch}_latent_dim", str(dims.get(branch, DEFAULT_LATENT_DIM[branch]))]
-    print(f"    $ {' '.join(cmd)}")
-
-    if dry_run:
-        print("    (dry-run: not executing)")
-        return
-
-    outcome = run_main_command(cmd, require_results_json=False)
-    if outcome["error"] is not None:
-        raise RuntimeError(f"Failed training VAE for {active_extractors} @ {dims}: {outcome['error']}")
-    print(f"    OK in {outcome['elapsed_seconds']}s")
+def load_phase1_dims() -> Dict[str, int]:
+    if not PHASE1_TOP_JSON.exists():
+        raise FileNotFoundError(
+            f"{PHASE1_TOP_JSON} not found. Run scripts/orchestrator_phase1.py --run first."
+        )
+    with open(PHASE1_TOP_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return {branch: entries[0]["dim"] for branch, entries in data["by_branch"].items()}
 
 
-def merge_latents_manual(
-    active_extractors: List[str], latent_dirs: Dict[str, Path], out_dir: Path
-) -> Dict[str, Path]:
-    """Mirrors main.py's Step 9 (--merge_vae_latents) column-prefixing logic
-    (same {branch}_ prefix convention, same label handling), but reads from
-    arbitrary latent_dirs instead of the hardcoded data/05_vae_latents/ path
-    -- needed for VAE beta/dropout candidates that main.py can't merge on
-    its own. Same pattern as scripts/run_full_stack_sweep.py."""
-    out_paths = {}
-    for split in ["train", "val", "test"]:
-        dfs = []
-        labels = None
-        for branch in active_extractors:
-            df = pd.read_pickle(latent_dirs[branch] / f"{split}.pkl")
-            if "label" in df.columns:
-                current_labels = df["label"].reset_index(drop=True)
-                if labels is None:
-                    labels = current_labels
-                df = df.drop(columns=["label"])
-            df = df.reset_index(drop=True)
-            df.columns = [c if str(c).startswith(f"{branch}_") else f"{branch}_{c}" for c in df.columns]
-            dfs.append(df)
-
-        merged_df = pd.concat(dfs, axis=1)
-        if labels is not None:
-            merged_df["label"] = labels.values
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{split}.pkl"
-        merged_df.to_pickle(out_path)
-        out_paths[split] = out_path
-
-    return out_paths
-
-
-def resolve_kan_input(
-    combo: List[str], config_label_: str, group_name: str, cand_label: str,
-    effective: Dict[str, Any], dry_run: bool,
-) -> Optional[Dict[str, Path]]:
-    """Decides how a candidate's KAN input is produced. Returns None when
-    (vae_beta, vae_dropout) match main.py's defaults -- callers should then
-    pass --merge_vae_latents and let main.py read the shared cache (after
-    ensure_vae_latents makes sure this latent preset exists in it). Returns
-    a {split: path} dict when they don't -- an isolated VAE was trained (if
-    missing) and manually merged, and callers should point --train_kan at
-    those paths directly instead of --merge_vae_latents."""
-
-    if is_default_vae_reg(effective):
-        ensure_vae_latents(combo, effective["latent"], dry_run=dry_run)
-        return None
-
-    tag = f"beta{effective['vae_beta']}_drop{effective['vae_dropout']}"
-    vae_data_dir = PHASE2_VAE_DATA_DIR / config_label_ / tag
-    vae_model_dir = PHASE2_VAE_MODEL_DIR / config_label_ / tag
-    merged_dir = PHASE2_VAE_MERGED_DIR / config_label_ / f"{group_name}_{cand_label}"
-
-    latent_dirs = {branch: vae_data_dir / branch / f"latent{effective['latent'][branch]}" for branch in combo}
-    missing = [
-        branch for branch in combo
-        if not latent_cache_is_fresh(branch, effective["latent"][branch], vae_data_dir)
-    ]
-
-    if missing:
-        print(f"    Missing isolated VAE (beta={effective['vae_beta']}, dropout={effective['vae_dropout']}): {missing}")
-        cmd = [python_executable(), "main.py", "--run_vaes"]
-        for branch in ALL_MODALITIES:
-            if branch not in combo:
-                cmd.append(f"--exclude_{branch}")
-            cmd += [f"--{branch}_latent_dim", str(effective["latent"].get(branch, DEFAULT_LATENT_DIM[branch]))]
-        cmd += [
-            "--vae_beta", str(effective["vae_beta"]),
-            "--vae_dropout", str(effective["vae_dropout"]),
-            "--vae_data_output_dir", str(vae_data_dir.relative_to(BASE_DIR)),
-            "--vae_model_output_dir", str(vae_model_dir.relative_to(BASE_DIR)),
-        ]
-        print(f"    $ {' '.join(cmd)}")
-
-        if dry_run:
-            print("    (dry-run: not executing)")
-        else:
-            outcome = run_main_command(cmd, require_results_json=False)
-            if outcome["error"] is not None:
-                raise RuntimeError(
-                    f"Failed training isolated VAE for {combo} "
-                    f"@ beta={effective['vae_beta']} dropout={effective['vae_dropout']}: {outcome['error']}"
-                )
-            print(f"    OK in {outcome['elapsed_seconds']}s")
-
-    if dry_run:
-        return {s: merged_dir / f"{s}.pkl" for s in ["train", "val", "test"]}
-
-    return merge_latents_manual(combo, latent_dirs, merged_dir)
-
-
-def build_kan_command(
-    combo: List[str], effective: Dict[str, Any], seed: int, output_dir: Path,
-    kan_pkl_paths: Optional[Dict[str, Path]] = None,
-) -> List[str]:
-    cmd = [python_executable(), "main.py"]
-    if kan_pkl_paths is None:
-        cmd.append("--merge_vae_latents")
-    cmd.append("--train_kan")
+def build_kan_command(combo: List[str], dims: Dict[str, int], seed: int) -> List[str]:
+    cmd = [python_executable(), "main.py", "--merge_vae_latents", "--train_kan"]
 
     for branch in ALL_MODALITIES:
         if branch not in combo:
             cmd.append(f"--exclude_{branch}")
-        cmd += [f"--{branch}_latent_dim", str(effective["latent"].get(branch, DEFAULT_LATENT_DIM[branch]))]
+        cmd += [f"--{branch}_latent_dim", str(dims[branch])]
 
-    if kan_pkl_paths is not None:
-        cmd += [
-            "--kan_train_pkl", str(kan_pkl_paths["train"]),
-            "--kan_val_pkl", str(kan_pkl_paths["val"]),
-            "--kan_test_pkl", str(kan_pkl_paths["test"]),
-        ]
-
+    output_dir = KAN_RUNS_DIR / "phase2" / combo_label(combo) / f"seed{seed}"
     cmd += [
-        "--kan_num_basis", str(effective["kan_num_basis"]),
-        "--kan_hidden_dim", str(effective["kan_hidden_dim"]),
-        "--kan_dropout", str(effective["kan_dropout"]),
-        "--kan_epochs", str(effective["kan_epochs"]),
-        "--kan_patience", str(effective["kan_patience"]),
-        "--kan_batch_size", str(effective["kan_batch_size"]),
-        "--kan_lr", str(effective["kan_lr"]),
-        "--kan_weight_decay", str(effective["kan_weight_decay"]),
         "--kan_seed", str(seed),
         "--kan_output_dir", str(output_dir.relative_to(BASE_DIR)),
-        # Repeated here even though this subprocess doesn't always retrain
-        # the VAE: main.py's Step 10 logs vae_hyperparams from its own args
-        # regardless of what actually trained it -- without this,
-        # results/{run_id}.json would misreport beta/dropout on runs that
-        # use a non-default isolated VAE.
-        "--vae_beta", str(effective["vae_beta"]),
-        "--vae_dropout", str(effective["vae_dropout"]),
     ]
     return cmd
 
 
-def run_group(
-    *,
-    combo: List[str],
-    label: str,
-    group_name: str,
-    candidates: Dict[str, Any],
-    resolved: Dict[str, Any],
-    apply_candidate,
-    dry_run: bool,
-) -> str:
-    """Runs every candidate x SEEDS for one hyperparameter group, then
-    aggregates (via aggregate_results) and returns the winning candidate
-    label. `apply_candidate(resolved, value) -> effective_dict` builds the
-    per-run config from the group's current resolved baseline + candidate.
-
-    Before looping seeds, resolve_kan_input() decides -- from `effective`'s
-    (latent, vae_beta, vae_dropout) -- whether this candidate can reuse the
-    shared default-VAE cache or needs an isolated VAE + manual merge. This
-    runs for every group (not just 'latent'/'vae_reg') because a non-default
-    vae_reg winner from an earlier group must keep being honored by later
-    groups (num_basis/hidden_dim/training), not silently fall back to the
-    default cache."""
-
-    print(f"\n  --- Group '{group_name}' ({len(candidates)} candidates x {len(SEEDS)} seeds) ---")
+def run_sweep(dims: Dict[str, int], dry_run: bool) -> None:
+    total = len(COMBOS) * len(SEEDS)
+    print(f"Phase 2: {len(COMBOS)} combos x {len(SEEDS)} seeds = {total} runs")
+    print(f"Using Phase 1 dims: {dims}")
+    print(f"Results: {PHASE2_RESULTS_JSONL}")
 
     ok_keys = load_ok_run_keys(PHASE2_RESULTS_JSONL) if not dry_run else set()
+    if ok_keys:
+        print(f"Resuming: {len(ok_keys)}/{total} runs already completed, skipping.")
 
-    for cand_label, cand_value in candidates.items():
-        effective = apply_candidate(resolved, cand_value)
-        kan_pkl_paths = resolve_kan_input(combo, label, group_name, cand_label, effective, dry_run=dry_run)
+    n_run = n_skip = n_failed = idx = 0
+
+    for combo in COMBOS:
+        ensure_vae_latents(combo, dims, dry_run=dry_run)
 
         for seed in SEEDS:
-            key = f"{label}__{group_name}__{cand_label}__seed{seed}"
-            output_dir = KAN_RUNS_DIR / "phase2" / label / group_name / cand_label / f"seed{seed}"
-            cmd = build_kan_command(combo, effective, seed, output_dir, kan_pkl_paths=kan_pkl_paths)
+            idx += 1
+            key = run_key_for(combo, seed)
+            label = f"[{idx:03d}/{total}] {key}"
 
             if dry_run:
-                print(f"    [{key}]\n      $ {' '.join(cmd)}")
+                cmd = build_kan_command(combo, dims, seed)
+                print(f"{label}\n  $ {' '.join(cmd)}")
                 continue
 
             if key in ok_keys:
-                print(f"    [{key}] SKIP (already completed)")
+                print(f"{label} SKIP (already completed)")
+                n_skip += 1
                 continue
 
-            print(f"    [{key}] RUN")
+            cmd = build_kan_command(combo, dims, seed)
+            print(f"{label} RUN\n  $ {' '.join(cmd)}")
+
             record = execute_and_log(
                 run_key=key,
                 cmd=cmd,
                 jsonl_path=PHASE2_RESULTS_JSONL,
                 meta={
                     "phase": "phase2",
-                    "config_label": label,
-                    "group": group_name,
-                    "candidate_label": cand_label,
                     "active_extractors": combo,
                     "seed": seed,
-                    "overrides": {k: v for k, v in effective.items() if k != "latent"},
+                    "overrides": {},
+                    "kan_output_dir": str(cmd[cmd.index("--kan_output_dir") + 1]),
                 },
             )
+
             if record["status"] == "ok":
-                print(f"      OK in {record['elapsed_seconds']}s -- {record['results_json']}")
+                n_run += 1
+                print(f"  OK in {record['elapsed_seconds']}s -- {record['results_json']}")
             else:
-                print(f"      FAILED -- {record['error']}")
+                n_failed += 1
+                print(f"  FAILED -- {record['error']}")
 
     if dry_run:
-        print(f"    (dry-run: '{group_name}''s winning candidate can't be resolved without real data; "
-              f"later groups assume this group's default value.)")
-        return None  # signals process_config to keep `resolved` at its current (default) values
+        print(f"\ndry-run: {total} runs planned (not executed).")
+        return
 
-    df = load_runs(PHASE2_RESULTS_JSONL)
-    df = df[(df.get("config_label") == label) & (df.get("group") == group_name)]
+    print(f"\nPhase 2 complete (this invocation): {n_run} new runs, {n_skip} skipped, {n_failed} failed.")
+    print(f"Total accumulated in {PHASE2_RESULTS_JSONL}: {len(load_ok_run_keys(PHASE2_RESULTS_JSONL))}/{total} ok.")
+
+
+def _phase1_pool_rows() -> pd.DataFrame:
+    """Raw per-seed rows for Phase 1's top-2-per-branch (8 (branch, dim)
+    pairs) -- pulled from PHASE1_RESULTS_JSONL, not re-run, so they can be
+    pooled into the same ranking as Phase 2's own combo runs."""
+    if not PHASE1_TOP_JSON.exists():
+        return pd.DataFrame()
+    with open(PHASE1_TOP_JSON, "r", encoding="utf-8") as f:
+        top = json.load(f)
+
+    winning_pairs = {
+        (branch, entry["dim"]) for branch, entries in top["by_branch"].items() for entry in entries
+    }
+
+    df = load_runs(PHASE1_RESULTS_JSONL)
     if df.empty:
-        raise RuntimeError(f"No successful runs in group '{group_name}' of '{label}' -- cannot continue.")
-
-    ranking = aggregate_by_config(df, group_by="candidate", metric=RANKING_METRIC)
-    wilcoxon_df = pairwise_wilcoxon(df, "candidate", ranking, top_n=min(4, len(ranking)), metric=RANKING_METRIC)
-    report(ranking, wilcoxon_df, metric=RANKING_METRIC, top_k=min(3, len(ranking)))
-
-    winner_config_key = ranking.iloc[0]["config"]  # "{group_name}::{cand_label}"
-    winner_label = winner_config_key.split("::", 1)[1]
-    print(f"  Winner of group '{group_name}': {winner_label}")
-    return winner_label
+        return df
+    mask = df.apply(lambda row: (row.get("branch"), row.get("dim")) in winning_pairs, axis=1)
+    return df[mask]
 
 
-def process_config(combo: List[str], dry_run: bool) -> Dict[str, Any]:
-    label = config_label(combo)
-    print(f"\n=== Configuration: {label} (extractors: {combo}) ===")
+def summarize() -> None:
+    phase2_df = load_runs(PHASE2_RESULTS_JSONL)
+    phase1_pool = _phase1_pool_rows()
+    combined = pd.concat([phase2_df, phase1_pool], ignore_index=True) if not phase1_pool.empty else phase2_df
 
-    resolved = initial_resolved()
+    if combined.empty:
+        print("No successful runs logged yet -- nothing to rank.")
+        return
 
-    # (a) latent space
-    winner = run_group(
-        combo=combo, label=label, group_name="latent",
-        candidates=LATENT_DIM_CANDIDATES, resolved=resolved,
-        apply_candidate=lambda r, v: {**r, "latent": v},
-        dry_run=dry_run,
-    )
-    if winner is not None:
-        resolved["latent"] = LATENT_DIM_CANDIDATES[winner]
+    ranking = aggregate_by_config(combined, group_by="extractors", metric=RANKING_METRIC)
+    top5 = ranking.head(5)
 
-    # (a2) VAE regularization (beta / dropout)
-    winner = run_group(
-        combo=combo, label=label, group_name="vae_reg",
-        candidates=VAE_REG_CANDIDATES, resolved=resolved,
-        apply_candidate=lambda r, v: {**r, **v},
-        dry_run=dry_run,
-    )
-    if winner is not None:
-        resolved.update(VAE_REG_CANDIDATES[winner])
+    print(f"\n=== Phase 2 top 5 (15 combos + 8 Phase 1 solo winners, by {RANKING_METRIC}) ===")
+    entries = []
+    for i, row in top5.iterrows():
+        combo = [m for m in ALL_MODALITIES if m in row["config"].split("+")]
+        subset = combined[combined["active_extractors"].apply(lambda c: "+".join(c)) == row["config"]]
+        if len(combo) == 1 and "dim" in subset.columns and subset["dim"].notna().any():
+            dims = {combo[0]: int(subset["dim"].iloc[0])}
+        else:
+            dims = load_phase1_dims()
+            dims = {b: dims[b] for b in combo}
 
-    # (b) KAN "inputs" == num_basis
-    winner = run_group(
-        combo=combo, label=label, group_name="num_basis",
-        candidates={str(v): v for v in KAN_NUM_BASIS_CANDIDATES}, resolved=resolved,
-        apply_candidate=lambda r, v: {**r, "kan_num_basis": v},
-        dry_run=dry_run,
-    )
-    if winner is not None:
-        resolved["kan_num_basis"] = int(winner)
+        print(f"  {i + 1}. {row['config']}  dims={dims}  {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
+              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])})")
+        entries.append({
+            "active_extractors": combo,
+            "latent_dims": dims,
+            f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
+            f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
+            "n_runs": int(row[f"{RANKING_METRIC}_count"]),
+        })
 
-    # (c) internal layers/nodes
-    winner = run_group(
-        combo=combo, label=label, group_name="hidden_dim",
-        candidates={str(v): v for v in KAN_HIDDEN_DIM_CANDIDATES}, resolved=resolved,
-        apply_candidate=lambda r, v: {**r, "kan_hidden_dim": v},
-        dry_run=dry_run,
-    )
-    if winner is not None:
-        resolved["kan_hidden_dim"] = int(winner)
-
-    # (d) training parameters
-    winner = run_group(
-        combo=combo, label=label, group_name="training",
-        candidates=KAN_TRAINING_CANDIDATES, resolved=resolved,
-        apply_candidate=lambda r, v: {**r, **v},
-        dry_run=dry_run,
-    )
-    if winner is not None:
-        resolved.update(KAN_TRAINING_CANDIDATES[winner])
-
-    print(f"\n=== Resolved for {label}: {resolved} ===")
-    return resolved
-
-
-def load_winning_configs(args) -> List[List[str]]:
-    if args.configs:
-        return json.loads(args.configs)
-
-    winners_path = Path(args.winners) if args.winners else PHASE1_WINNERS_JSON
-    if not winners_path.exists():
-        raise FileNotFoundError(
-            f"{winners_path} not found. Generate it with "
-            f"'python scripts/aggregate_results.py --input <phase1.jsonl> --group-by extractors --output-winners' "
-            f"or pass --configs '[[...], [...]]' directly."
-        )
-    with open(winners_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data["winners"]
+    PHASE2_TOP_JSON.parent.mkdir(parents=True, exist_ok=True)
+    with open(PHASE2_TOP_JSON, "w", encoding="utf-8") as f:
+        json.dump({"metric": RANKING_METRIC, "top": entries}, f, indent=2, ensure_ascii=False)
+    print(f"\nSaved: {PHASE2_TOP_JSON}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 2: sequential hyperparameter sweep over Phase 1's top-3")
-    parser.add_argument("--winners", default=None, help=f"JSON with the winning configs (default: {PHASE1_WINNERS_JSON})")
-    parser.add_argument("--configs", default=None, help="Inline list of combos, e.g. '[[\"semantic\",\"style\"]]'")
+    parser = argparse.ArgumentParser(description="Phase 2: extractor combinations using Phase 1's winning dims")
+    parser.add_argument("--run", action="store_true", help="Run the full sweep (resumable)")
+    parser.add_argument("--summary", action="store_true", help="Aggregate results/orchestrator_phase2.jsonl")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    configs = load_winning_configs(args)
-    print(f"Phase 2: {len(configs)} winning configurations: {configs}")
-    print(f"Results: {PHASE2_RESULTS_JSONL}")
+    if not any([args.run, args.summary]):
+        parser.error("Pass at least one of --run, --summary")
 
-    results = {}
-    with warnings.catch_warnings():
-        warnings.simplefilter("always")
-        for combo in configs:
-            results[config_label(combo)] = process_config(combo, dry_run=args.dry_run)
+    if args.run:
+        dims = load_phase1_dims()
+        run_sweep(dims, dry_run=args.dry_run)
+        if not args.dry_run:
+            summarize()
 
-    if args.dry_run:
-        print("\ndry-run: plan printed, nothing executed.")
-        return
-
-    print("\n=== Phase 2 final summary ===")
-    for label, resolved in results.items():
-        print(f"  {label}: {resolved}")
+    if args.summary and not args.run:
+        summarize()
 
 
 if __name__ == "__main__":

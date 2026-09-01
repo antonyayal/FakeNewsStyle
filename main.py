@@ -30,6 +30,54 @@ Usage
 
 Run `python main.py --help` for the full flag list (per-branch latent dims,
 KAN hyperparameters, modality exclusion via --exclude_{branch}, etc.).
+
+Corpus mode: original split vs. k-fold packages vs. source-disjoint packages
+-----------------------------------------------------------------------------
+--corpus_mode {original,kfold,source_disjoint}  default: original (the fixed
+                                 train/development/test split under data/01_corpus_pkl/).
+    'kfold' pools train+development+test and repartitions them into
+    --kfold_n (default 5) label-stratified folds (NOT source-disjoint --
+    see README.md's "Known Limitations & Caveats"), cached under
+    data/01_corpus_pkl_cv/seed{S}_n{N}/fold{k}/ (src/data/kfold_corpus.py).
+    --kfold_index (0..kfold_n-1) selects which fold this invocation uses as
+    train/val/test; --kfold_split_seed (default 20260820) makes the fold
+    assignment reproducible across invocations.
+
+    'source_disjoint' pools train+development+test the same way, but
+    repartitions them into --source_split_n (default 5) folds such that no
+    `Source` (news outlet) value ever appears in more than one of a fold's
+    train/val/test (src/data/source_split_corpus.py) -- this is the direct
+    fix for the leakage 'kfold' does NOT address. --source_split_index
+    (0..source_split_n-1) selects which fold; --source_split_seed (default
+    20260821) makes the assignment reproducible. Outlet group sizes in this
+    corpus are highly uneven, so the resulting split sizes/label balance
+    will not match the clean ~70/30 of 'original' or 'kfold' -- that's the
+    accepted cost of removing the leakage at its source.
+
+    Setting --corpus_mode kfold or source_disjoint changes every stage's
+    *default* input/output directory (PROCESSED_DIR, PROCESSED_BY_MODEL_DIR,
+    FEATURES_RAW_DIR, the VAE/merge/KAN output dirs) to a fold-tagged path
+    under a parallel "_cv" (kfold) or "_source_cv" (source_disjoint) tree
+    (e.g. data/03_features_raw_cv/.../fold2/ or
+    data/03_features_raw_source_cv/.../fold2/) -- no step's logic changes,
+    and no --*_input_dir/--*_output_dir overrides are needed to keep one
+    fold's artifacts from colliding with another's or with the original
+    split's. --prepare_corpus is not allowed together with either mode
+    (folds are derived from the already-converted data/01_corpus_pkl/, not
+    from data/raw/*.xlsx directly).
+
+    Example -- one kfold fold, full pipeline, in a single invocation:
+        python main.py --corpus_mode kfold --kfold_n 5 --kfold_index 0 \\
+            --preprocess_text --extract_semantic --extract_emotion --extract_style --extract_context \\
+            --run_vaes --merge_vae_latents --train_kan --kan_seed 42
+
+    Example -- one source-disjoint fold:
+        python main.py --corpus_mode source_disjoint --source_split_n 5 --source_split_index 0 \\
+            --preprocess_text --extract_semantic --extract_emotion --extract_style --extract_context \\
+            --run_vaes --merge_vae_latents --train_kan --kan_seed 42
+
+    See scripts/run_cv_packages.py (kfold) and scripts/orchestrator_phase4.py
+    (source_disjoint) for looping this over every fold x seed.
 """
 # =====================================================
 # Imports
@@ -49,6 +97,8 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 from src.data.convert_xlsx_to_pkl import convert_folder_xlsx_to_pkl
+from src.data.kfold_corpus import ensure_kfold_corpus, fold_dir as kfold_fold_dir
+from src.data.source_split_corpus import ensure_source_disjoint_corpus, fold_dir as source_fold_dir
 from src.text.preprocess_text import preprocess_corpus_splits
 from src.features.semantic_extractor import extract_semantic_features_for_splits
 from src.features.emotion_extractor import extract_emotion_features_for_splits
@@ -161,6 +211,32 @@ def _resolve_emotion_device(requested: str) -> str:
 # =====================================================
 parser = argparse.ArgumentParser(description="FakeNewsStyle Main Entry Point")
 
+# ---- corpus mode: run against the fixed original split, or against one
+# stratified fold of a pooled k-fold repartition (see src/data/kfold_corpus.py).
+# Only PROCESSED_DIR/PROCESSED_BY_MODEL_DIR/FEATURES_RAW_DIR and the VAE/merge/
+# KAN output-dir defaults change; every step's logic is unchanged.
+parser.add_argument("--corpus_mode", type=str, default="original",
+                     choices=["original", "kfold", "source_disjoint"],
+                     help="'original' (default): fixed train/development/test split. "
+                          "'kfold': pool train+development+test and use one stratified fold "
+                          "(label-stratified only, NOT source-disjoint -- see README.md's "
+                          "Known Limitations) as this run's train/val/test. "
+                          "'source_disjoint': pool and use one fold where no Source (outlet) "
+                          "appears in more than one of train/val/test (src/data/source_split_corpus.py).")
+parser.add_argument("--kfold_n", type=int, default=5, help="Number of folds (--corpus_mode kfold).")
+parser.add_argument("--kfold_index", type=int, default=None,
+                     help="Which fold (0..kfold_n-1) this run uses as train/val/test. Required with --corpus_mode kfold.")
+parser.add_argument("--kfold_split_seed", type=int, default=20260820,
+                     help="random_state for the stratified fold split (--corpus_mode kfold). "
+                          "Same (kfold_n, kfold_split_seed) always reuses the same cached folds.")
+parser.add_argument("--source_split_n", type=int, default=5, help="Number of folds (--corpus_mode source_disjoint).")
+parser.add_argument("--source_split_index", type=int, default=None,
+                     help="Which fold (0..source_split_n-1) this run uses as train/val/test. "
+                          "Required with --corpus_mode source_disjoint.")
+parser.add_argument("--source_split_seed", type=int, default=20260821,
+                     help="random_state for the grouped fold split (--corpus_mode source_disjoint). "
+                          "Same (source_split_n, source_split_seed) always reuses the same cached folds.")
+
 # ---- corpus
 parser.add_argument("--prepare_corpus", action="store_true")
 
@@ -245,8 +321,13 @@ parser.add_argument("--vae_batch_size", type=int, default=32)
 parser.add_argument("--vae_learning_rate", type=float, default=1e-3)
 parser.add_argument("--vae_beta", type=float, default=1.0)
 parser.add_argument("--vae_dropout", type=float, default=0.1)
-parser.add_argument("--vae_data_output_dir", type=str, default="data/05_vae_latents")
-parser.add_argument("--vae_model_output_dir", type=str, default="models/vae")
+parser.add_argument("--vae_patience", type=int, default=10, help="EarlyStopping patience for VAE training.")
+parser.add_argument("--vae_data_output_dir", type=str, default=None,
+                     help="Default: data/05_vae_latents (data/05_vae_latents_cv/.../fold{k} in kfold mode, "
+                          "data/05_vae_latents_source_cv/.../fold{k} in source_disjoint mode).")
+parser.add_argument("--vae_model_output_dir", type=str, default=None,
+                     help="Default: models/vae (models/vae_cv/.../fold{k} in kfold mode, "
+                          "models/vae_source_cv/.../fold{k} in source_disjoint mode).")
 
 # ---- merge VAE latents
 parser.add_argument(
@@ -297,8 +378,85 @@ args = parser.parse_args()
 # Paths
 # =====================================================
 RAW_DIR = BASE_DIR / "data" / "raw"
-PROCESSED_DIR = BASE_DIR / "data" / "01_corpus_pkl"
-PROCESSED_BY_MODEL_DIR = BASE_DIR / "data" / "02_corpus_clean"
+
+# RAW_CORPUS_PKL_DIR is always the fixed --prepare_corpus output (data/raw/*.xlsx
+# -> data/01_corpus_pkl/*.pkl) -- unaffected by --corpus_mode, and it's the
+# pooling source ensure_kfold_corpus reads from below. PROCESSED_DIR is what
+# --preprocess_text actually reads by default: the same fixed dir in
+# 'original' mode, or one fold's train/val/test PKLs (derived from
+# RAW_CORPUS_PKL_DIR, never re-run through --prepare_corpus) in 'kfold' mode.
+# Every downstream default (PROCESSED_BY_MODEL_DIR, FEATURES_RAW_DIR, VAE/
+# merge/KAN output dirs) is resolved from this one FOLD_TAG, so a fold's
+# entire pipeline output lives under its own directory tree automatically --
+# no per-step --*_input_dir overrides needed (see README.md's "Known
+# Limitations" section and memory of the CV-packages design discussion).
+RAW_CORPUS_PKL_DIR = BASE_DIR / "data" / "01_corpus_pkl"
+
+FOLD_TAG = None
+if args.corpus_mode == "kfold":
+    if args.prepare_corpus:
+        parser.error("--prepare_corpus is not compatible with --corpus_mode kfold -- "
+                      "folds are derived from the already-converted data/01_corpus_pkl/*.pkl, "
+                      "run --prepare_corpus once in --corpus_mode original first if needed.")
+    if args.kfold_index is None:
+        parser.error("--kfold_index is required when --corpus_mode kfold.")
+    if not (0 <= args.kfold_index < args.kfold_n):
+        parser.error(f"--kfold_index must be in [0, {args.kfold_n}).")
+
+    ensure_kfold_corpus(
+        source_dir=RAW_CORPUS_PKL_DIR,
+        output_base_dir=BASE_DIR / "data" / "01_corpus_pkl_cv",
+        n_splits=args.kfold_n,
+        split_seed=args.kfold_split_seed,
+    )
+    FOLD_TAG = f"fold{args.kfold_index}"
+    PROCESSED_DIR = kfold_fold_dir(
+        BASE_DIR / "data" / "01_corpus_pkl_cv", args.kfold_n, args.kfold_split_seed, args.kfold_index
+    )
+elif args.corpus_mode == "source_disjoint":
+    if args.prepare_corpus:
+        parser.error("--prepare_corpus is not compatible with --corpus_mode source_disjoint -- "
+                      "folds are derived from the already-converted data/01_corpus_pkl/*.pkl, "
+                      "run --prepare_corpus once in --corpus_mode original first if needed.")
+    if args.source_split_index is None:
+        parser.error("--source_split_index is required when --corpus_mode source_disjoint.")
+    if not (0 <= args.source_split_index < args.source_split_n):
+        parser.error(f"--source_split_index must be in [0, {args.source_split_n}).")
+
+    ensure_source_disjoint_corpus(
+        source_dir=RAW_CORPUS_PKL_DIR,
+        output_base_dir=BASE_DIR / "data" / "01_corpus_pkl_source_cv",
+        n_splits=args.source_split_n,
+        split_seed=args.source_split_seed,
+    )
+    FOLD_TAG = f"fold{args.source_split_index}"
+    PROCESSED_DIR = source_fold_dir(
+        BASE_DIR / "data" / "01_corpus_pkl_source_cv", args.source_split_n, args.source_split_seed, args.source_split_index
+    )
+else:
+    PROCESSED_DIR = RAW_CORPUS_PKL_DIR
+
+
+def _fold_aware_dir(original_relative: str, cv_relative: str, source_cv_relative: str) -> Path:
+    """original_relative/cv_relative/source_cv_relative are paths relative to
+    BASE_DIR. In kfold mode, cv_relative is further namespaced by
+    seed{kfold_split_seed}_n{kfold_n}/{FOLD_TAG} (same layout as
+    src/data/kfold_corpus.py's fold_dir()); in source_disjoint mode,
+    source_cv_relative is namespaced the same way by
+    seed{source_split_seed}_n{source_split_n}/{FOLD_TAG}
+    (src/data/source_split_corpus.py's fold_dir()) -- so a different
+    --kfold_n/--kfold_split_seed or --source_split_n/--source_split_seed
+    pair, or a different fold, never collides with another's artifacts, the
+    other mode's artifacts, or the original split's."""
+    if FOLD_TAG is None:
+        return BASE_DIR / original_relative
+    if args.corpus_mode == "kfold":
+        return BASE_DIR / cv_relative / f"seed{args.kfold_split_seed}_n{args.kfold_n}" / FOLD_TAG
+    return BASE_DIR / source_cv_relative / f"seed{args.source_split_seed}_n{args.source_split_n}" / FOLD_TAG
+
+
+PROCESSED_BY_MODEL_DIR = _fold_aware_dir("data/02_corpus_clean", "data/02_corpus_clean_cv", "data/02_corpus_clean_source_cv")
+FEATURES_RAW_DIR = _fold_aware_dir("data/03_features_raw", "data/03_features_raw_cv", "data/03_features_raw_source_cv")
 
 LOGS_FEATURES_DIR = BASE_DIR / "logs" / "features"
 LOGS_SEMANTIC_DIR = _ensure_dir(LOGS_FEATURES_DIR / "semantic")
@@ -309,13 +467,24 @@ LOGS_CONTEXT_DIR = _ensure_dir(LOGS_FEATURES_DIR / "context")
 RAW_FEATURES_MERGE_OUTPUT_DIR = (
     Path(args.raw_features_merge_output_dir)
     if args.raw_features_merge_output_dir
-    else BASE_DIR / "data" / "04_features_merged"
+    else _fold_aware_dir("data/04_features_merged", "data/04_features_merged_cv", "data/04_features_merged_source_cv")
+)
+
+VAE_DATA_OUTPUT_DIR = (
+    Path(args.vae_data_output_dir)
+    if args.vae_data_output_dir
+    else _fold_aware_dir("data/05_vae_latents", "data/05_vae_latents_cv", "data/05_vae_latents_source_cv")
+)
+VAE_MODEL_OUTPUT_DIR = (
+    Path(args.vae_model_output_dir)
+    if args.vae_model_output_dir
+    else _fold_aware_dir("models/vae", "models/vae_cv", "models/vae_source_cv")
 )
 
 VAE_LATENT_MERGE_OUTPUT_DIR = (
     Path(args.merge_output_dir)
     if args.merge_output_dir
-    else BASE_DIR / "data" / "06_vae_latents_merged"
+    else _fold_aware_dir("data/06_vae_latents_merged", "data/06_vae_latents_merged_cv", "data/06_vae_latents_merged_source_cv")
 )
 
 
@@ -337,10 +506,10 @@ if args.prepare_corpus:
     print("Preparing corpus from raw to processed")
     _log("PrepareCorpus: START")
     _log(f"raw_dir={RAW_DIR}")
-    _log(f"processed_dir={PROCESSED_DIR}")
+    _log(f"processed_dir={RAW_CORPUS_PKL_DIR}")
 
     try:
-        generated = convert_folder_xlsx_to_pkl(raw_dir=RAW_DIR, processed_dir=PROCESSED_DIR)
+        generated = convert_folder_xlsx_to_pkl(raw_dir=RAW_DIR, processed_dir=RAW_CORPUS_PKL_DIR)
 
         for p in generated:
             print(f"Saved: {p.name}")
@@ -380,7 +549,7 @@ if args.extract_semantic:
     print("Extracting semantic features (XLM-RoBERTa)")
 
     input_dir = Path(args.preprocess_output_dir) if args.preprocess_output_dir else PROCESSED_BY_MODEL_DIR
-    output_dir = BASE_DIR / "data" / "03_features_raw" / "semantic"
+    output_dir = FEATURES_RAW_DIR / "semantic"
 
     extract_semantic_features_for_splits(
         input_dir=input_dir,
@@ -404,7 +573,7 @@ if args.extract_emotion:
     print("Extracting emotion features (pysentimiento)")
 
     emotion_input_dir = _default_input_dir(args.emotion_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    emotion_output_dir = BASE_DIR / "data" / "03_features_raw" / "emotion"
+    emotion_output_dir = FEATURES_RAW_DIR / "emotion"
     emotion_output_dir.mkdir(parents=True, exist_ok=True)
 
     emotion_device = _resolve_emotion_device(args.emotion_device)
@@ -433,7 +602,7 @@ if args.extract_style:
     print("Extracting style features (spaCy/textstat/wordfreq)")
 
     style_input_dir = _default_input_dir(args.style_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    style_output_dir = BASE_DIR / "data" / "03_features_raw" / "style"
+    style_output_dir = FEATURES_RAW_DIR / "style"
     style_output_dir.mkdir(parents=True, exist_ok=True)
 
     style_extractor = StyleExtractor(
@@ -498,7 +667,7 @@ if args.extract_context:
     print("Extracting context features (Source/Domain/Topic/Age)")
 
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    context_output_dir = BASE_DIR / "data" / "03_features_raw" / "context"
+    context_output_dir = FEATURES_RAW_DIR / "context"
     context_output_dir.mkdir(parents=True, exist_ok=True)
 
     ctx_extractor = ContextExtractor(
@@ -587,10 +756,10 @@ if args.merge_raw_features:
     print("Merging raw feature PKLs before VAE")
 
     raw_feature_dirs = {
-        "semantic": BASE_DIR / "data" / "03_features_raw" / "semantic",
-        "emotion": BASE_DIR / "data" / "03_features_raw" / "emotion",
-        "style": BASE_DIR / "data" / "03_features_raw" / "style",
-        "context": BASE_DIR / "data" / "03_features_raw" / "context",
+        "semantic": FEATURES_RAW_DIR / "semantic",
+        "emotion": FEATURES_RAW_DIR / "emotion",
+        "style": FEATURES_RAW_DIR / "style",
+        "context": FEATURES_RAW_DIR / "context",
     }
 
     merge_all_splits(
@@ -615,36 +784,36 @@ if args.run_vaes:
             "latent_dim": int(args.semantic_latent_dim),
             "hidden_dims": [512, 256],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "train_semantic.pkl",
-            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "val_semantic.pkl",
-            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "semantic" / "test_semantic.pkl",
+            "train_pkl": FEATURES_RAW_DIR / "semantic" / "train_semantic.pkl",
+            "val_pkl": FEATURES_RAW_DIR / "semantic" / "val_semantic.pkl",
+            "test_pkl": FEATURES_RAW_DIR / "semantic" / "test_semantic.pkl",
         },
         "emotion": {
             "enabled": not args.exclude_emotion,
             "latent_dim": int(args.emotion_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": ["emo_probs", "sent_probs", "signals"],
-            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "train_emotion.pkl",
-            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "val_emotion.pkl",
-            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "emotion" / "test_emotion.pkl",
+            "train_pkl": FEATURES_RAW_DIR / "emotion" / "train_emotion.pkl",
+            "val_pkl": FEATURES_RAW_DIR / "emotion" / "val_emotion.pkl",
+            "test_pkl": FEATURES_RAW_DIR / "emotion" / "test_emotion.pkl",
         },
         "style": {
             "enabled": not args.exclude_style,
             "latent_dim": int(args.style_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "train_style.pkl",
-            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "val_style.pkl",
-            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "style" / "test_style.pkl",
+            "train_pkl": FEATURES_RAW_DIR / "style" / "train_style.pkl",
+            "val_pkl": FEATURES_RAW_DIR / "style" / "val_style.pkl",
+            "test_pkl": FEATURES_RAW_DIR / "style" / "test_style.pkl",
         },
         "context": {
             "enabled": not args.exclude_context,
             "latent_dim": int(args.context_latent_dim),
             "hidden_dims": [256, 128],
             "feature_columns": None,
-            "train_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "train_context.pkl",
-            "val_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "val_context.pkl",
-            "test_pkl": BASE_DIR / "data" / "03_features_raw" / "context" / "test_context.pkl",
+            "train_pkl": FEATURES_RAW_DIR / "context" / "train_context.pkl",
+            "val_pkl": FEATURES_RAW_DIR / "context" / "val_context.pkl",
+            "test_pkl": FEATURES_RAW_DIR / "context" / "test_context.pkl",
         },
     }
 
@@ -659,19 +828,8 @@ if args.run_vaes:
     for feature_name, cfg in vae_configs.items():
         latent_dim = cfg["latent_dim"]
 
-        output_data_dir = (
-            BASE_DIR
-            / args.vae_data_output_dir
-            / feature_name
-            / f"latent{latent_dim}"
-        )
-
-        output_model_dir = (
-            BASE_DIR
-            / args.vae_model_output_dir
-            / feature_name
-            / f"latent{latent_dim}"
-        )
+        output_data_dir = VAE_DATA_OUTPUT_DIR / feature_name / f"latent{latent_dim}"
+        output_model_dir = VAE_MODEL_OUTPUT_DIR / feature_name / f"latent{latent_dim}"
 
         print("=" * 80)
         print(f"Training VAE: {feature_name.upper()}")
@@ -695,6 +853,7 @@ if args.run_vaes:
             epochs=int(args.vae_epochs),
             batch_size=int(args.vae_batch_size),
             learning_rate=float(args.vae_learning_rate),
+            patience=int(args.vae_patience),
             output_data_dir=output_data_dir,
             output_model_dir=output_model_dir,
             feature_name=feature_name,
@@ -726,7 +885,7 @@ if args.merge_vae_latents:
     }
 
     latent_dirs = {
-        name: BASE_DIR / "data" / "05_vae_latents" / name / f"latent{dim}"
+        name: VAE_DATA_OUTPUT_DIR / name / f"latent{dim}"
         for name, dim in latent_dims.items()
         if use_modality[name]
     }
@@ -830,7 +989,7 @@ if args.train_kan:
     kan_output_dir = (
         Path(args.kan_output_dir)
         if args.kan_output_dir
-        else BASE_DIR / "data" / "07_kan_runs" / "merged"
+        else _fold_aware_dir("data/07_kan_runs/merged", "data/07_kan_runs/cv", "data/07_kan_runs/source_cv")
     )
 
     print(f"KAN train PKL: {kan_train_pkl}")
@@ -934,15 +1093,16 @@ if args.train_kan:
     }
     active_extractors = [m for m in MODALITY_ORDER if use_modality[m]]
 
-    latent_dims_all = {
+    latent_dims_by_modality = {
         "semantic": int(args.semantic_latent_dim),
         "emotion": int(args.emotion_latent_dim),
         "style": int(args.style_latent_dim),
         "context": int(args.context_latent_dim),
     }
+    latent_dims_all = {name: latent_dims_by_modality[name] for name in active_extractors}
 
     vae_model_dirs = {
-        name: BASE_DIR / args.vae_model_output_dir / name / f"latent{latent_dims_all[name]}"
+        name: VAE_MODEL_OUTPUT_DIR / name / f"latent{latent_dims_all[name]}"
         for name in active_extractors
     }
 
