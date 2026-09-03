@@ -277,6 +277,17 @@ parser.add_argument("--style_oov_zipf_threshold", type=float, default=1.5)
 # ---- context
 parser.add_argument("--extract_context", action="store_true")
 parser.add_argument("--context_input_dir", type=str, default=None)
+parser.add_argument("--context_output_dir", type=str, default=None,
+                     help="Override for where raw context features are written "
+                          "(default: FEATURES_RAW_DIR/context). Lets an isolated "
+                          "context variant (e.g. identity-free, Phase 6) coexist "
+                          "with the shared default cache other phases read.")
+parser.add_argument("--context_vae_input_dir", type=str, default=None,
+                     help="Override for where --run_vaes reads context's raw "
+                          "{split}_context.pkl from (default: FEATURES_RAW_DIR/"
+                          "context). Pair with --context_output_dir so an "
+                          "isolated context variant's VAE trains on its own "
+                          "raw features, not the shared default cache.")
 parser.add_argument("--context_topic_column", type=str, default="Topic")
 parser.add_argument("--context_source_column", type=str, default="Source")
 parser.add_argument("--context_link_column", type=str, default="Link")
@@ -667,7 +678,7 @@ if args.extract_context:
     print("Extracting context features (Source/Domain/Topic/Age)")
 
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    context_output_dir = FEATURES_RAW_DIR / "context"
+    context_output_dir = Path(args.context_output_dir) if args.context_output_dir else FEATURES_RAW_DIR / "context"
     context_output_dir.mkdir(parents=True, exist_ok=True)
 
     ctx_extractor = ContextExtractor(
@@ -811,9 +822,9 @@ if args.run_vaes:
             "latent_dim": int(args.context_latent_dim),
             "hidden_dims": [256, 128],
             "feature_columns": None,
-            "train_pkl": FEATURES_RAW_DIR / "context" / "train_context.pkl",
-            "val_pkl": FEATURES_RAW_DIR / "context" / "val_context.pkl",
-            "test_pkl": FEATURES_RAW_DIR / "context" / "test_context.pkl",
+            "train_pkl": (Path(args.context_vae_input_dir) if args.context_vae_input_dir else FEATURES_RAW_DIR / "context") / "train_context.pkl",
+            "val_pkl": (Path(args.context_vae_input_dir) if args.context_vae_input_dir else FEATURES_RAW_DIR / "context") / "val_context.pkl",
+            "test_pkl": (Path(args.context_vae_input_dir) if args.context_vae_input_dir else FEATURES_RAW_DIR / "context") / "test_context.pkl",
         },
     }
 

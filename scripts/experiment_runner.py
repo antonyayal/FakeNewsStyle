@@ -50,11 +50,16 @@ def _row_count(pkl_path: Path) -> int:
     return len(obj)
 
 
-def latent_cache_is_fresh(branch: str, dim: int, vae_latents_dir: Path) -> bool:
+def latent_cache_is_fresh(branch: str, dim: int, vae_latents_dir: Path, raw_dir_override: Path = None) -> bool:
     """True if vae_latents_dir/{branch}/latent{dim}/{split}.pkl exists AND its
     row count matches the CURRENT data/03_features_raw/{branch}/{split}_{branch}.pkl
     -- i.e. these cached VAE latents were trained on the corpus that's on disk
     right now, not a stale snapshot from an earlier corpus revision.
+
+    raw_dir_override lets a caller point the freshness check at an isolated
+    raw-features dir instead of the shared FEATURES_RAW_DIR/{branch} (e.g.
+    Phase 6's identity-free context, which lives under its own path so it
+    doesn't collide with the shared leaky cache Phase 1-5 read).
 
     Callers previously trusted file *existence* alone (ensure_vae_latents /
     ensure_default_vae_latents), which silently reused latents trained on old
@@ -64,12 +69,13 @@ def latent_cache_is_fresh(branch: str, dim: int, vae_latents_dir: Path) -> bool:
     evaluating on stale data when every merged branch happened to be equally
     stale."""
     branch_dir = vae_latents_dir / branch / f"latent{dim}"
+    raw_dir = raw_dir_override if raw_dir_override is not None else FEATURES_RAW_DIR / branch
     for split in ["train", "val", "test"]:
         latent_pkl = branch_dir / f"{split}.pkl"
         if not latent_pkl.exists():
             return False
 
-        raw_pkl = FEATURES_RAW_DIR / branch / f"{split}_{branch}.pkl"
+        raw_pkl = raw_dir / f"{split}_{branch}.pkl"
         if not raw_pkl.exists():
             continue  # nothing to validate against -- existence is all we can check
 

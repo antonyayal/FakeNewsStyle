@@ -124,6 +124,64 @@ completo por config x fold, media/std/min/max sobre las 5 seeds) y
 `phase{4,5}_top.json` (un solo ganador global: el config con mejor F1
 promedio combinando los 5 folds x 5 seeds, no un ganador por fold).
 
+## Fase 6 — context sin identidad (control de leakage de Source/Domain)
+
+`orchestrator_phase6.py` no depende de la Fase 3/4/5 — es hermana de la
+Fase 2 (solo necesita `results/phase1_top.json`). Repite el mismo protocolo
+de las Fases 1-5 pero con `context` sin `Source`/`Domain`
+(`--context_source_dim 0 --context_domain_dim 0`, dejando solo Topic+edad+
+flags), para separar cuánto del aporte de `context` es señal genuina vs.
+memorización de medio (ver `dataset_source_label_leakage` / "Known
+Limitations & Caveats" en el README principal). Aislado del cache
+compartido vía `main.py --context_output_dir`/`--context_vae_input_dir` —
+puede correr en paralelo con las Fases 1-5 sin tocarlas (excepto Stage D/E,
+ver abajo).
+
+Cinco stages, seleccionables con `--stage {ab,c,d,e,all}` (`ab` es el
+default):
+
+```bash
+python scripts/orchestrator_phase6.py --run --dry-run --stage ab   # Stage A+B (95 corridas)
+python scripts/orchestrator_phase6.py --run --stage ab
+
+python scripts/orchestrator_phase6.py --run --dry-run --stage c    # Stage C (450 corridas)
+python scripts/orchestrator_phase6.py --run --stage c
+
+python scripts/orchestrator_phase6.py --run --dry-run --stage d    # Stage D (125 corridas)
+python scripts/orchestrator_phase6.py --run --stage d
+
+python scripts/orchestrator_phase6.py --run --dry-run --stage e    # Stage E (125 corridas)
+python scripts/orchestrator_phase6.py --run --stage e
+```
+
+- **Stage A** (Fase 1 equivalente): `context` solo, dim sobre
+  `PHASE6_CONTEXT_DIM_CANDIDATES` (4/8/16/23, capado al dim identity-free
+  real) x 5 seeds -> `results/phase6_context_top.json`.
+- **Stage B** (Fase 2 equivalente): los 15 combos, `context` en la dim
+  ganadora de Stage A y las otras 3 modalidades en sus dims rank-1 de la
+  Fase 1 x 5 seeds -> ranking final en `results/phase6_top.json`.
+- **Stage C** (Fase 3 equivalente): las 18 variantes de `PHASE3_CANDIDATES`
+  sobre el top-5 de Stage B (pooled con el top-2 de Stage A y el top-2
+  original de la Fase 1 para semantic/emotion/style, igual que la Fase 2
+  poolea la Fase 1) -> `results/phase6_stageC_top.json`.
+- **Stage D/E** (Fase 4/5 equivalentes): validación k-fold / source-disjoint
+  del top-5 de Stage C.
+
+**Aislamiento de `context` por rama que sí importa (Stage C):** aunque una
+variante use `vae_beta`/`vae_dropout` default (que para las otras 3
+modalidades reutiliza el cache compartido de `resolve_kan_input`), `context`
+**siempre** se entrena aislado con las features identity-free — nunca toca
+ni lee el cache compartido `data/05_vae_latents/context/`.
+
+**Restricción de seguridad en Stage D/E:** reutilizan el mismo cache
+compartido por fold que leen/sobreescriben las Fases 4 y 5
+(`data/0{3,5}_features_raw_cv` / `_source_cv`), que asume un solo proceso
+escribiéndolo a la vez. Stage D exige que `results/phase4_top.json` ya
+exista (Fase 4 **terminada**, no solo iniciada) antes de ejecutar de
+verdad; Stage E exige lo mismo con `results/phase5_top.json`. Correrlas en
+paralelo con la Fase 4/5 real corrompería el cache de ambas — el chequeo
+solo se salta en `--dry-run`.
+
 ## Manejo de errores
 
 Si una corrida de `main.py` falla (código de salida != 0, o no imprime la

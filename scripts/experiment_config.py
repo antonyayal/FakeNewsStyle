@@ -143,3 +143,58 @@ PHASE5_N_FOLDS = 5
 PHASE5_SPLIT_SEED = 20260821
 PHASE5_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase5"
 PHASE5_MERGED_CV_DIR = BASE_DIR / "data" / "06_vae_latents_merged_source_cv"
+
+# ---- Phase 6: identity-free context (Source/Domain leakage control) --------
+# Re-runs Phase 1 (context branch only) + Phase 2 (15 combos) with context's
+# Source/Domain hash embeddings switched off (--context_source_dim 0
+# --context_domain_dim 0, keeping only Topic+age+flags) -- see
+# dataset_source_label_leakage memory / README's "Known Limitations &
+# Caveats". Fully isolated from the shared default cache other phases read:
+# raw features, VAE, and merged latents all live under their own *_phase6
+# dirs (via main.py's --context_output_dir/--context_vae_input_dir and the
+# usual --vae_data_output_dir/--vae_model_output_dir/--merge_output_dir),
+# so Phase 6 can run interleaved with Phase 1-5 without touching them.
+PHASE6_CONTEXT_SOURCE_DIM = 0
+PHASE6_CONTEXT_DOMAIN_DIM = 0
+# Capped at the identity-free raw dim (topic16 + age1 + 6 flags = 23) --
+# main.py's defaults for context_topic_dim (16) and context_author_dim (0).
+PHASE6_CONTEXT_DIM_CANDIDATES = [4, 8, 16, 23]
+PHASE6_TOP_K = 2  # kept for context, mirrors PHASE1_TOP_K
+
+PHASE6_RAW_DIR = BASE_DIR / "data" / "03_features_raw_phase6"
+PHASE6_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_phase6"
+PHASE6_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_phase6"
+PHASE6_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_phase6"
+PHASE6_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6"
+
+PHASE6_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6.jsonl"
+PHASE6_CONTEXT_TOP_JSON = RESULTS_DIR / "phase6_context_top.json"
+PHASE6_TOP_JSON = RESULTS_DIR / "phase6_top.json"  # Stage B: 15-combo ranking
+
+# Stage C (Phase 3 equivalent: VAE-reg + KAN hyperparams on Stage B's top 5)
+PHASE6_STAGE_C_TOP_JSON = RESULTS_DIR / "phase6_stageC_top.json"
+
+# Stage D/E (Phase 4/5 equivalent: kfold / source-disjoint validation of
+# Stage C's top 5). Per-fold raw context + isolated VAE live under their own
+# *_phase6 subpaths (namespaced by corpus_mode so kfold and source_disjoint
+# never collide with each other); everything else (semantic/emotion/style)
+# reuses the SAME fold-aware shared cache Phase 4/5 already populate
+# (data/03_features_raw_cv, _source_cv, etc.) since only context is affected
+# by the leakage fix.
+PHASE6_STAGE_D_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6_stageD.jsonl"
+PHASE6_STAGE_D_PER_FOLD_JSON = RESULTS_DIR / "phase6_stageD_per_fold.json"
+PHASE6_STAGE_D_TOP_JSON = RESULTS_DIR / "phase6_stageD_top.json"
+PHASE6_STAGE_D_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6_stageD"
+PHASE6_STAGE_D_RAW_DIR = BASE_DIR / "data" / "03_features_raw_cv_phase6"
+PHASE6_STAGE_D_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_cv_phase6"
+PHASE6_STAGE_D_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_cv_phase6"
+PHASE6_STAGE_D_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_cv_phase6"
+
+PHASE6_STAGE_E_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6_stageE.jsonl"
+PHASE6_STAGE_E_PER_FOLD_JSON = RESULTS_DIR / "phase6_stageE_per_fold.json"
+PHASE6_STAGE_E_TOP_JSON = RESULTS_DIR / "phase6_stageE_top.json"
+PHASE6_STAGE_E_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6_stageE"
+PHASE6_STAGE_E_RAW_DIR = BASE_DIR / "data" / "03_features_raw_source_cv_phase6"
+PHASE6_STAGE_E_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_source_cv_phase6"
+PHASE6_STAGE_E_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_source_cv_phase6"
+PHASE6_STAGE_E_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_source_cv_phase6"
