@@ -19,6 +19,21 @@ h1, h2, h3, h4 { font-weight: 600; }
 h1 { font-size: 1.6rem; margin-bottom: 4px; }
 h2 { font-size: 1.2rem; margin-top: 40px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 section > h2 { position: sticky; top: 0; z-index: 20; background: var(--bg); padding-top: 6px; }
+h2[data-tooltip] { cursor: help; position: relative; }
+h2[data-tooltip]::before {
+  content: "\24D8"; margin-left: 8px; font-size: 0.8rem; font-weight: 400;
+  color: var(--text-dim); vertical-align: middle;
+}
+h2[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute; left: 0; top: 100%; margin-top: 4px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 10px 14px; font-size: 0.82rem; font-weight: 400;
+  line-height: 1.45; white-space: normal; width: max-content; max-width: 480px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12); z-index: 40;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.12s ease;
+}
+h2[data-tooltip]:hover::after { opacity: 1; visibility: visible; }
 a { color: var(--accent); }
 header.report-header {
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
@@ -211,7 +226,7 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="summary">
-    <h2>Summary table — every run</h2>
+    <h2 data-tooltip="Every loaded run as one row. The Parameters tab shows what was configured (extractors, latent dims, VAE/KAN hyperparameters, seed); the Metrics tab shows the outcome (accuracy, gap, F1, ROC-AUC, calibration, timing). Click a header to sort, type in the box to filter, hover a header for its definition.">Summary table — every run</h2>
     <div class="controls">
       <div class="view-tabs">
         <button class="btn primary" id="tab-params" type="button">Parameters</button>
@@ -228,21 +243,131 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="charts-a">
-    <h2>Overfitting: accuracy by split</h2>
+    <h2 data-tooltip="Grouped bars of train / validation / test accuracy, one triple per run. A tall train bar next to a short test bar is overfitting.">Overfitting: accuracy by split</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="bar-chart" style="height:420px;"></div></div></div>
   </section>
 
   <section id="charts-b">
-    <h2>Extractor combinations vs. test metrics</h2>
+    <h2 data-tooltip="Heatmap: rows = extractor combinations, columns = accuracy / F1 / ROC-AUC / log-loss on test, cell = mean over that combination’s runs (±sd shown as text). Rows sorted by mean F1.">Extractor combinations vs. test metrics</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart" style="height:460px;"></div></div></div>
   </section>
 
   <section id="charts-c">
-    <h2>Calibration: ECE / Brier score vs. accuracy (test)</h2>
+    <h2 data-tooltip="Two scatter plots: each point is a run, x = test accuracy, y = ECE (left) or Brier score (right). Lower y at the same x = better-calibrated probabilities.">Calibration: ECE / Brier score vs. accuracy (test)</h2>
     <div class="chart-grid">
       <div class="chart-box"><div id="scatter-ece" style="height:400px;"></div></div>
       <div class="chart-box"><div id="scatter-brier" style="height:400px;"></div></div>
     </div>
+  </section>
+
+  <section id="charts-d">
+    <h2 data-tooltip="3D scatter, one point per run. x = running count of that combination’s runs, y = extractor combination, z = total VAE latent size (log). Color = test F1 on a 0–1 Blues scale.">Combination × repetitions × VAE latent size (color = test F1)</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="combo-3d-scatter" style="height:620px;"></div></div></div>
+  </section>
+
+  <section id="charts-e">
+    <h2 data-tooltip="Box-and-whisker of test F1, one box per corpus regime: full original split, normal stratified k-folds, and source-disjoint folds (the outlet-leakage test). Every run is a dot; the box spread is the variation across seeds and folds.">Test F1 by corpus type (Full / normal folds / disjoint), spread over seeds &amp; folds</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="f1-boxplot" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-f">
+    <h2 data-tooltip="One box per extractor combination, sorted by median test F1, colored by how many branches it uses. Dots are individual runs; box height shows how much F1 varies for that combination.">Test F1 by extractor combination, spread over seeds &amp; folds</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="f1-combo-boxplot" style="height:480px;"></div></div></div>
+  </section>
+
+  <section id="charts-g">
+    <h2 data-tooltip="Grouped bars: x = Full, Fold 0, Fold 1, … ; grey = full split, blue = normal folds, red = disjoint folds. Bar height = mean test F1 over that cell’s runs, error bar = standard deviation across seeds.">Mean test F1: full split vs. normal folds vs. disjoint folds (± sd across seeds)</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="f1-fold-bars" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-h">
+    <h2 data-tooltip="Heatmap: rows = extractor combinations, columns = one per distinct KAN hyperparameter value that was swept (num_basis=8, hidden_dim=32, …). Cell color = mean test F1 of the runs using that setting. Reads as “which KAN settings worked best for this combination?”.">Mean test F1 by extractor combination × KAN hyperparameter setting</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="kan-params-heatmap" style="height:480px;"></div></div></div>
+  </section>
+
+  <section id="charts-i">
+    <h2 data-tooltip="One box per KAN hidden_dim (neurons per layer). Left-to-right shows whether more neurons raise F1; each box’s height shows whether they make results more or less stable. Dots are individual runs.">KAN neurons (hidden_dim) vs. test F1 — box height = variation</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="neurons-variation-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-j">
+    <h2 data-tooltip="3D scatter, one point per (combination, total latent size) group. x = VAE latent size (log), y = extractor combination, z = number of runs in that group. Color = the group’s mean test F1 (Blues, 0–1).">VAE latent size × extractor combination × run count (color = mean test F1)</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="latent-volume-scatter" style="height:600px;"></div></div></div>
+  </section>
+
+  <section id="charts-k">
+    <h2 data-tooltip="Line per extractor combination: x = total VAE latent size (log), y = mean test F1 ± sd across seeds. Shows the “elbow” where adding latent dimensions stops helping.">Latent-dimension sweep — test F1 vs. VAE latent size</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="latent-sweep-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-l">
+    <h2 data-tooltip="Row-normalized 2×2 confusion matrix (actual vs. predicted, True/Real = 0, Fake = 1) for the single run with the highest test F1. Cell text shows raw count and row percentage.">Confusion matrix — best run by test F1</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="confusion-matrix-chart" style="height:440px;"></div></div></div>
+  </section>
+
+  <section id="charts-m">
+    <h2 data-tooltip="Grouped bars: x = news topic (Politics, Covid-19, …), one bar per extractor combination, y = mean per-topic test F1 across runs. Hover shows the approximate article count per topic.">Per-topic test F1 by extractor combination</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="topic-breakdown-chart" style="height:480px;"></div></div></div>
+  </section>
+
+  <section id="charts-n">
+    <h2 data-tooltip="Scatter of test precision vs. recall, one point per run, colored by extractor combination. Dotted curves are lines of constant F1 (0.5–0.9).">Precision vs. recall (test) — iso-F1 contours</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="precision-recall-chart" style="height:480px;"></div></div></div>
+  </section>
+
+  <section id="charts-o">
+    <h2 data-tooltip="Scatter: x = KAN parameter count (log), y = test F1, colored by combination. The black step line is the Pareto frontier — the best F1 reachable at each parameter budget.">Efficiency frontier — test F1 vs. model cost</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="pareto-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-p">
+    <h2 data-tooltip="One line per run crossing an axis for each hyperparameter that varies (num_basis, hidden_dim, weight_decay, beta, dropout, latent size) and ending at test F1. Line color = test F1. Drag along an axis to filter.">Parallel coordinates — hyperparameters → test F1</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="parcoords-chart" style="height:480px;"></div></div></div>
+  </section>
+
+  <section id="charts-q">
+    <h2 data-tooltip="Strip/box of test F1 grouped by random seed, split by extractor combination. Shows how much of the F1 spread is just initialization luck rather than a real effect.">Seed variance — test F1 by random seed</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="seed-strip-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-r">
+    <h2 data-tooltip="One connected line per run through its train, validation and test accuracy. Lines are red when |train − test| ≥ the gap threshold (0.15), flagging overfitting.">Overfitting slope — train → val → test accuracy per run</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="slope-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-s">
+    <h2 data-tooltip="Dumbbell chart: for each extractor combination, a blue dot at its mean F1 on normal folds and a red dot on source-disjoint folds, joined by a line. The gap is the F1 cost of removing outlet leakage. Needs runs from both fold modes.">Cost of the outlet-disjoint split — normal vs. disjoint F1 per combination</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="dumbbell-chart" style="height:420px;"></div></div></div>
+  </section>
+
+  <section id="charts-t">
+    <h2 data-tooltip="Diverging horizontal bars per combination: ECE extends left, Brier score extends right, both from zero. Shorter bars on either side = better-calibrated probabilities.">Calibration — ECE vs. Brier score per combination (diverging)</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="calibration-diverging-chart" style="height:440px;"></div></div></div>
+  </section>
+
+  <section id="charts-u">
+    <h2 data-tooltip="Scatterplot matrix (SPLOM) of the test metrics F1, ROC-AUC, PR-AUC, MCC and ECE against each other, one point per run, colored by extractor combination. Shows which metrics move together.">Metric correlations — scatterplot matrix (test)</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="splom-chart" style="height:560px;"></div></div></div>
+  </section>
+
+  <section id="charts-v">
+    <h2 data-tooltip="Bump chart: x = fold, y = rank of each extractor combination by mean test F1 within that fold (1 = best, axis inverted). Crossing lines mean the ranking is not stable across folds. Needs fold-tagged runs.">Ranking stability — combination rank by fold</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="bump-chart" style="height:440px;"></div></div></div>
+  </section>
+
+  <section id="charts-w">
+    <h2 data-tooltip="Violin plot of mean predictive entropy per run, grouped by extractor combination. Near 0 = the model is always confident; near 0.69 nats = maximally unsure. Very low entropy on a bad F1 flags a collapsed model.">Model confidence — prediction entropy distribution by combination</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="entropy-violin-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-x">
+    <h2 data-tooltip="Empirical cumulative distribution of test F1: the solid black curve is all runs, dotted curves are per combination. A curve further right and steeper = higher and more consistent F1.">Test F1 ECDF — share of runs above a given F1</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="f1-ecdf-chart" style="height:460px;"></div></div></div>
+  </section>
+
+  <section id="charts-y">
+    <h2 data-tooltip="For each of the four branches (semantic / emotion / style / context), two boxes of test F1: runs where that branch is active (blue) vs. inactive (grey). A combination run counts toward each branch it uses. Answers “does this one modality help on its own terms?”.">Test F1 with vs. without each individual extractor</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="extractor-f1-chart" style="height:460px;"></div></div></div>
   </section>
 
   <footer>FakeNewsStyle — standalone viewer (viewer/index.html), 100% client-side</footer>
@@ -829,7 +954,7 @@ function renderHeatmap() {
   }));
 
   Plotly.newPlot('heatmap-chart', [{
-    z, x: metricLabels, y: combos, type: 'heatmap', colorscale: 'Viridis',
+    z, x: metricLabels, y: combos, type: 'heatmap', colorscale: 'Blues',
     text, texttemplate: '%{text}', hovertemplate: '%{y} · %{x}: %{z:.4f}<extra></extra>',
   }], {
     title: 'Extractor combinations vs. test metrics (mean±std if there are multiple runs)',
@@ -864,6 +989,945 @@ function renderCalibrationScatters() {
   }, { responsive: true, displaylogo: false });
 }
 
+// 3D scatter: one marker per run.
+//   y = extractor combination (categorical, mapped to an integer index)
+//   x = a running counter 1..N over the runs that share that combination
+//       (chronological by timestamp) -- i.e. how many runs of the combo
+//       have been seen so far, not a label
+//   z = VAE latent size actually fed to the KAN -- the sum of latent_dims
+//       over the run's active branches (per-branch breakdown is in the hover)
+//   color = test F1, on a fixed 0..1 Blues scale (same palette as the heatmaps)
+function renderCombo3DScatter() {
+  const byCombo = {};
+  allRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+
+  // y order: fewer extractors first, then alphabetical -- stable regardless of
+  // the order files were loaded in.
+  const combos = Object.keys(byCombo).sort((a, b) => {
+    const na = byCombo[a][0].active_extractors.length;
+    const nb = byCombo[b][0].active_extractors.length;
+    return na - nb || a.localeCompare(b);
+  });
+  const comboIndex = Object.fromEntries(combos.map((c, i) => [c, i]));
+
+  const xs = [], ys = [], zs = [], colors = [], hovers = [];
+  combos.forEach(combo => {
+    const rs = [...byCombo[combo]].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+    const n = rs.length;
+    rs.forEach((r, i) => {
+      const perBranch = Object.entries(r.latent_dims || {})
+        .filter(([k]) => r.active_extractors.includes(k));
+      const latentSum = perBranch.reduce((s, [, v]) => s + Number(v), 0);
+      const ldStr = perBranch.length ? perBranch.map(([k, v]) => `${k}=${v}`).join(', ') : '—';
+      xs.push(i + 1);
+      ys.push(comboIndex[combo]);
+      zs.push(latentSum);
+      colors.push(r.test_f1 === null || r.test_f1 === undefined ? NaN : r.test_f1);
+      hovers.push(`${escapeHtml(r.run_id)}<br>${escapeHtml(combo)} — run ${i + 1} of ${n}`
+        + `<br>latent dims: ${escapeHtml(ldStr)} (Σ=${latentSum})`
+        + `<br>test F1 = ${fmtNum(r.test_f1)}`);
+    });
+  });
+
+  Plotly.newPlot('combo-3d-scatter', [{
+    type: 'scatter3d', mode: 'markers',
+    x: xs, y: ys, z: zs, customdata: hovers,
+    hovertemplate: '%{customdata}<extra></extra>',
+    marker: {
+      size: 5,
+      color: colors,
+      colorscale: 'Blues',
+      cmin: 0, cmax: 1,
+      colorbar: { title: 'test F1', tickvals: [0, 0.25, 0.5, 0.75, 1] },
+      opacity: 0.9,
+      line: { width: 0.5, color: 'rgba(0,0,0,0.25)' },
+    },
+  }], {
+    title: 'Extractor combination × run count × VAE latent size (color = test F1)',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    scene: {
+      xaxis: { title: 'Run count for that combination (1..N)', dtick: 1 },
+      yaxis: { title: 'Extractor combination', tickvals: combos.map((_, i) => i), ticktext: combos },
+      zaxis: { title: 'VAE latent size (Σ active branches, log scale)', type: 'log' },
+    },
+    margin: { t: 40, l: 0, r: 0, b: 0 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// Box-and-whisker plot of test F1, one box per corpus type -- the full
+// original split, the "normal" stratified k-folds, and the source-disjoint
+// folds (the outlet-leakage test). Every run is also drawn as a jittered
+// point so the spread across seeds (and folds) is visible; boxmean:'sd'
+// overlays the mean and standard deviation.
+function renderF1Boxplot() {
+  const groups = [
+    { key: 'original', name: 'Full corpus', color: '#6b7280' },
+    { key: 'kfold', name: 'Normal folds', color: '#2563eb' },
+    { key: 'source_disjoint', name: 'Disjoint folds (join)', color: '#dc2626' },
+  ];
+
+  const traces = groups.map(g => {
+    const rs = allRuns.filter(r => r.corpus_mode === g.key
+      && r.test_f1 !== null && r.test_f1 !== undefined);
+    return {
+      type: 'box', name: `${g.name} (n=${rs.length})`,
+      y: rs.map(r => r.test_f1),
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(r.corpus_label)}<br>seed = ${r.seed ?? '—'}`),
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra></extra>',
+      boxpoints: 'all', jitter: 0.5, pointpos: 0, boxmean: 'sd',
+      marker: { size: 5, color: g.color },
+      line: { color: g.color },
+      fillcolor: 'rgba(0,0,0,0)',
+    };
+  }).filter(t => t.y.length);
+
+  if (!traces.length) {
+    document.getElementById('f1-boxplot').innerHTML =
+      '<p class="empty-msg">No runs with a test F1 to plot.</p>';
+    return;
+  }
+
+  Plotly.newPlot('f1-boxplot', traces, {
+    title: 'Test F1 across seeds & folds — Full vs. normal folds vs. disjoint',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    yaxis: { title: 'test F1', zeroline: false, rangemode: 'tozero' },
+    showlegend: false,
+    margin: { t: 40 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// Same idea as renderF1Boxplot(), but one box per extractor combination
+// instead of per corpus type: shows how the choice of feature branches shifts
+// the test-F1 distribution, with every run drawn as a jittered point so the
+// spread across seeds/folds is visible. Boxes are sorted by median F1 and
+// colored by how many branches the combination uses.
+function renderF1ByComboBoxplot() {
+  const byCombo = {};
+  allRuns.forEach(r => {
+    if (r.test_f1 === null || r.test_f1 === undefined) return;
+    (byCombo[r.combo] = byCombo[r.combo] || []).push(r);
+  });
+  const combos = Object.keys(byCombo);
+
+  const target = document.getElementById('f1-combo-boxplot');
+  if (!combos.length) {
+    target.innerHTML = '<p class="empty-msg">No runs with a test F1 to plot.</p>';
+    return;
+  }
+
+  const median = arr => {
+    const s = [...arr].sort((a, b) => a - b);
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+  combos.sort((a, b) =>
+    median(byCombo[a].map(r => r.test_f1)) - median(byCombo[b].map(r => r.test_f1)));
+
+  const EXTRACTOR_COLORS = { 1: '#2563eb', 2: '#16a34a', 3: '#b45309', 4: '#dc2626' };
+
+  const traces = combos.map(combo => {
+    const rs = byCombo[combo];
+    const nExtr = rs[0].active_extractors.length;
+    const color = EXTRACTOR_COLORS[nExtr] || '#6b7280';
+    return {
+      type: 'box', name: `${combo} (n=${rs.length})`,
+      y: rs.map(r => r.test_f1),
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(r.corpus_label)}<br>seed = ${r.seed ?? '—'}`),
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra></extra>',
+      boxpoints: 'all', jitter: 0.5, pointpos: 0, boxmean: 'sd',
+      marker: { size: 4, color },
+      line: { color },
+      fillcolor: 'rgba(0,0,0,0)',
+    };
+  });
+
+  Plotly.newPlot('f1-combo-boxplot', traces, {
+    title: 'Test F1 by extractor combination (sorted by median; color = # of branches)',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    xaxis: { tickangle: -35 },
+    yaxis: { title: 'test F1', zeroline: false, rangemode: 'tozero' },
+    showlegend: false,
+    margin: { t: 40, b: 120 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// Grouped bar chart comparing test F1 across the three corpus regimes: the
+// full original split, the "normal" stratified k-folds, and the
+// source-disjoint folds (the outlet-leakage test). The x axis is
+// ["Full", "Fold 0", "Fold 1", ...]: the grey "Full corpus" trace only has a
+// bar at "Full", the blue/red fold traces only at each "Fold k". Bar height =
+// mean test F1 over the runs (seeds) in that cell; error bar = standard
+// deviation across them.
+function renderF1ByFoldBars() {
+  const withF1 = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const foldRuns = withF1.filter(r => r.corpus_fold !== null && r.corpus_fold !== undefined);
+  const fullRuns = withF1.filter(r => r.corpus_mode === 'original');
+
+  const target = document.getElementById('f1-fold-bars');
+  if (!foldRuns.length && !fullRuns.length) {
+    target.innerHTML = '<p class="empty-msg">No runs with a test F1 to plot.</p>';
+    return;
+  }
+
+  const folds = [...new Set(foldRuns.map(r => r.corpus_fold))].sort((a, b) => a - b);
+  const cats = ['Full', ...folds.map(f => `Fold ${f}`)];
+
+  const agg = (vals) => {
+    const mu = vals.length ? mean(vals) : null;
+    return { mu, sd: vals.length ? std(vals, mu) : 0, n: vals.length };
+  };
+
+  const traces = [];
+
+  const fullStat = agg(fullRuns.map(r => r.test_f1));
+  traces.push({
+    type: 'bar', name: 'Full corpus',
+    x: cats,
+    y: [fullStat.mu, ...folds.map(() => null)],
+    error_y: { type: 'data', array: [fullStat.sd, ...folds.map(() => 0)], visible: true, color: 'rgba(0,0,0,0.45)', thickness: 1.5 },
+    marker: { color: '#6b7280' },
+    customdata: [[fullStat.n, fullStat.sd], ...folds.map(() => [0, 0])],
+    hovertemplate: '%{x}<br>mean test F1 = %{y:.4f}<br>sd = %{customdata[1]:.4f}<br>runs = %{customdata[0]}<extra>Full corpus</extra>',
+  });
+
+  [
+    { key: 'kfold', name: 'Normal folds', color: '#2563eb' },
+    { key: 'source_disjoint', name: 'Disjoint folds (join)', color: '#dc2626' },
+  ].forEach(m => {
+    const stats = folds.map(f =>
+      agg(foldRuns.filter(r => r.corpus_mode === m.key && r.corpus_fold === f).map(r => r.test_f1)));
+    if (!stats.some(s => s.n)) return;
+    traces.push({
+      type: 'bar', name: m.name,
+      x: cats,
+      y: [null, ...stats.map(s => s.mu)],
+      error_y: { type: 'data', array: [0, ...stats.map(s => s.sd)], visible: true, color: 'rgba(0,0,0,0.45)', thickness: 1.5 },
+      marker: { color: m.color },
+      customdata: [[0, 0], ...stats.map(s => [s.n, s.sd])],
+      hovertemplate: '%{x}<br>mean test F1 = %{y:.4f}<br>sd = %{customdata[1]:.4f}<br>runs = %{customdata[0]}<extra>' + m.name + '</extra>',
+    });
+  });
+
+  Plotly.newPlot('f1-fold-bars', traces, {
+    title: 'Mean test F1: full split vs. normal folds vs. disjoint folds (± sd across seeds)',
+    barmode: 'group',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    xaxis: { title: 'corpus / fold', categoryorder: 'array', categoryarray: cats },
+    yaxis: { title: 'mean test F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.18 },
+    margin: { t: 40, b: 70 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// Heatmap: rows = extractor combinations, columns = one per distinct KAN
+// hyperparameter setting (e.g. "num_basis=8", "hidden_dim=32", ...), grouped
+// by knob. Cell color = mean test F1 over the runs of that combination whose
+// KAN used that setting, on a fixed 0..1 Blues scale (light = low F1, dark =
+// high F1 -- the same palette as the "Extractor combinations vs. test
+// metrics" heatmap). Reads as "for this combination, which KAN settings gave
+// the best F1?". `seed` and any knob that was never swept are dropped.
+function renderKanParamsHeatmap() {
+  const target = document.getElementById('kan-params-heatmap');
+  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!runs.length) {
+    target.innerHTML = '<p class="empty-msg">No runs with a test F1 to plot.</p>';
+    return;
+  }
+
+  const keys = new Set();
+  runs.forEach(r => Object.keys(r.kan_hyperparams || {}).forEach(k => keys.add(k)));
+  const params = [...keys].filter(k => k !== 'seed').filter(k => {
+    const vals = new Set(runs
+      .map(r => r.kan_hyperparams[k])
+      .filter(v => v !== undefined && v !== null));
+    return vals.size > 1;
+  });
+
+  if (!params.length) {
+    target.innerHTML = '<p class="empty-msg">No KAN hyperparameter was varied across these runs.</p>';
+    return;
+  }
+
+  const fmtVal = (x) => (typeof x === 'number' && !Number.isInteger(x) && Math.abs(x) < 0.01)
+    ? x.toExponential(1) : String(x);
+
+  const columns = [];
+  params.forEach(p => {
+    const vals = [...new Set(runs
+      .map(r => r.kan_hyperparams[p])
+      .filter(v => v !== undefined && v !== null))]
+      .sort((a, b) => (typeof a === 'number' && typeof b === 'number')
+        ? a - b : String(a).localeCompare(String(b)));
+    vals.forEach(v => columns.push({ param: p, value: v, label: `${p}=${fmtVal(v)}` }));
+  });
+
+  const byCombo = {};
+  runs.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  const combos = Object.keys(byCombo).sort((a, b) => {
+    const na = byCombo[a][0].active_extractors.length;
+    const nb = byCombo[b][0].active_extractors.length;
+    return na - nb || a.localeCompare(b);
+  });
+
+  const cellF1s = (combo, col) => byCombo[combo]
+    .filter(r => r.kan_hyperparams[col.param] === col.value)
+    .map(r => r.test_f1);
+
+  const z = combos.map(c => columns.map(col => {
+    const f1s = cellF1s(c, col);
+    return f1s.length ? mean(f1s) : null;
+  }));
+  const text = combos.map(c => columns.map(col => {
+    const f1s = cellF1s(c, col);
+    if (!f1s.length) return '';
+    const m_ = mean(f1s);
+    return f1s.length > 1 ? `${m_.toFixed(3)}±${std(f1s, m_).toFixed(3)}` : m_.toFixed(3);
+  }));
+
+  Plotly.newPlot('kan-params-heatmap', [{
+    z, x: columns.map(c => c.label), y: combos, text, type: 'heatmap',
+    colorscale: 'Blues', zmin: 0, zmax: 1,
+    texttemplate: '%{text}', hoverongaps: false,
+    hovertemplate: '%{y}<br>%{x}<br>mean test F1 = %{z:.4f}<extra></extra>',
+    colorbar: { title: 'mean test F1' },
+  }], {
+    title: 'Mean test F1 by extractor combination × KAN hyperparameter setting',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    xaxis: { tickangle: -40 },
+    margin: { t: 60, l: 220, b: 120 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// KAN network width (kan_hyperparams.hidden_dim = number of neurons per
+// KANLayer) vs. test F1. One box per distinct hidden_dim; every run is a
+// jittered dot, so the height of the box = how much F1 varies at that neuron
+// count, and comparing box centers left-to-right shows whether more neurons
+// help. boxmean:'sd' marks the mean and ±1 sd inside each box.
+function renderNeuronsVariationChart() {
+  const target = document.getElementById('neurons-variation-chart');
+  const rs = allRuns.filter(r =>
+    r.test_f1 !== null && r.test_f1 !== undefined &&
+    typeof (r.kan_hyperparams || {}).hidden_dim === 'number');
+
+  if (!rs.length) {
+    target.innerHTML = '<p class="empty-msg">No runs log a KAN hidden_dim together with a test F1.</p>';
+    return;
+  }
+
+  const catArray = [...new Set(rs.map(r => r.kan_hyperparams.hidden_dim))]
+    .sort((a, b) => a - b).map(String);
+
+  Plotly.newPlot('neurons-variation-chart', [{
+    type: 'box',
+    x: rs.map(r => String(r.kan_hyperparams.hidden_dim)),
+    y: rs.map(r => r.test_f1),
+    text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(r.combo)}`
+      + `<br>hidden_dim = ${r.kan_hyperparams.hidden_dim}, num_basis = ${r.kan_hyperparams.num_basis ?? '—'}`
+      + `<br>seed = ${r.seed ?? '—'}`),
+    hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra></extra>',
+    boxpoints: 'all', jitter: 0.5, pointpos: 0, boxmean: 'sd',
+    marker: { size: 4, color: '#2563eb' },
+    line: { color: '#2563eb' },
+    fillcolor: 'rgba(37,99,235,0.08)',
+  }], {
+    title: 'KAN neurons (hidden_dim) vs. test F1 — box height = variation',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    xaxis: { title: 'KAN hidden_dim (neurons per layer)', type: 'category',
+             categoryorder: 'array', categoryarray: catArray },
+    yaxis: { title: 'test F1', rangemode: 'tozero' },
+    showlegend: false,
+    margin: { t: 40, b: 70 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// 3D scatter: VAE latent size (x, log) × extractor combination (y) × run
+// count / "volume" (z). Runs are grouped by (combination, total latent size),
+// so a combination tried at two latent sizes is two markers. Marker color =
+// mean test F1 of the group (same 0..1 Blues scale as the heatmaps).
+function renderLatentVsVolumeScatter() {
+  const target = document.getElementById('latent-volume-scatter');
+  if (!allRuns.length) {
+    target.innerHTML = '<p class="empty-msg">No runs loaded.</p>';
+    return;
+  }
+
+  const groups = {};
+  allRuns.forEach(r => {
+    const perBranch = Object.entries(r.latent_dims || {})
+      .filter(([k]) => r.active_extractors.includes(k));
+    const latentSum = perBranch.reduce((s, [, v]) => s + Number(v), 0);
+    const key = `${r.combo} @ ${latentSum}`;
+    (groups[key] = groups[key] || {
+      combo: r.combo, latentSum, runs: [],
+      ldStr: perBranch.length ? perBranch.map(([k, v]) => `${k}=${v}`).join(', ') : '—',
+    }).runs.push(r);
+  });
+
+  const comboMeta = {};
+  allRuns.forEach(r => { comboMeta[r.combo] = r.active_extractors.length; });
+  const combos = [...new Set(Object.values(groups).map(g => g.combo))]
+    .sort((a, b) => (comboMeta[a] - comboMeta[b]) || a.localeCompare(b));
+  const comboIndex = Object.fromEntries(combos.map((c, i) => [c, i]));
+
+  const xs = [], ys = [], zs = [], colors = [], hovers = [];
+  Object.values(groups).forEach(g => {
+    const f1s = g.runs.map(r => r.test_f1).filter(v => v !== null && v !== undefined);
+    xs.push(g.latentSum);
+    ys.push(comboIndex[g.combo]);
+    zs.push(g.runs.length);
+    colors.push(f1s.length ? mean(f1s) : NaN);
+    hovers.push(`${escapeHtml(g.combo)}<br>latent: ${escapeHtml(g.ldStr)} (Σ=${g.latentSum})`
+      + `<br>volume (runs) = ${g.runs.length}`
+      + `<br>mean test F1 = ${f1s.length ? mean(f1s).toFixed(4) : '—'}`);
+  });
+
+  Plotly.newPlot('latent-volume-scatter', [{
+    type: 'scatter3d', mode: 'markers',
+    x: xs, y: ys, z: zs, customdata: hovers,
+    hovertemplate: '%{customdata}<extra></extra>',
+    marker: {
+      size: 6,
+      color: colors, colorscale: 'Blues', cmin: 0, cmax: 1,
+      colorbar: { title: 'mean test F1', tickvals: [0, 0.25, 0.5, 0.75, 1] },
+      opacity: 0.9,
+      line: { width: 0.5, color: 'rgba(0,0,0,0.3)' },
+    },
+  }], {
+    title: 'VAE latent size × extractor combination × run count ("volume")',
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: '#1a1f2b' },
+    scene: {
+      xaxis: { title: 'VAE latent size (Σ active branches, log)', type: 'log' },
+      yaxis: { title: 'Extractor combination', tickvals: combos.map((_, i) => i), ticktext: combos },
+      zaxis: { title: 'volume — runs for that combination + latent size', rangemode: 'tozero' },
+    },
+    margin: { t: 40, l: 0, r: 0, b: 0 },
+  }, { responsive: true, displaylogo: false });
+}
+
+// =====================================================
+// Extra charts (proposals over the full run-record schema)
+// Shared helpers
+// =====================================================
+const CHART_PALETTE = ['#2563eb', '#16a34a', '#b45309', '#dc2626', '#9333ea', '#0891b2',
+                       '#db2777', '#65a30d', '#ca8a04', '#4f46e5', '#0d9488', '#e11d48'];
+const CHART_LAYOUT = { paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#1a1f2b' } };
+const CHART_CFG = { responsive: true, displaylogo: false };
+function baseLayout(extra) { return Object.assign({}, CHART_LAYOUT, extra); }
+
+function chartComboOrder(runs) {
+  const nExtr = {};
+  runs.forEach(r => { nExtr[r.combo] = r.active_extractors.length; });
+  return [...new Set(runs.map(r => r.combo))]
+    .sort((a, b) => (nExtr[a] - nExtr[b]) || a.localeCompare(b));
+}
+function chartComboColors(combos) {
+  return Object.fromEntries(combos.map((c, i) => [c, CHART_PALETTE[i % CHART_PALETTE.length]]));
+}
+function chartLatentSum(r) {
+  return Object.entries(r.latent_dims || {})
+    .filter(([k]) => r.active_extractors.includes(k))
+    .reduce((s, [, v]) => s + Number(v), 0);
+}
+function chartTestMetric(r, k) {
+  const t = (r.metrics && r.metrics.test) || {};
+  return (t[k] === undefined || t[k] === null) ? null : t[k];
+}
+function chartEmpty(id, msg) {
+  document.getElementById(id).innerHTML = `<p class="empty-msg">${escapeHtml(msg)}</p>`;
+}
+
+// (k) Latent-dimension sweep: test F1 vs. VAE latent size, one line per
+// combination (mean ± sd across seeds). The classic "where's the elbow?" plot.
+function renderLatentSweep() {
+  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined && chartLatentSum(r) > 0);
+  if (!runs.length) { chartEmpty('latent-sweep-chart', 'No runs carry latent dims together with a test F1.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const traces = combos.map(combo => {
+    const byDim = {};
+    runs.filter(r => r.combo === combo).forEach(r => {
+      const d = chartLatentSum(r);
+      (byDim[d] = byDim[d] || []).push(r.test_f1);
+    });
+    const dims = Object.keys(byDim).map(Number).sort((a, b) => a - b);
+    return {
+      type: 'scatter', mode: 'lines+markers', name: combo,
+      x: dims, y: dims.map(d => mean(byDim[d])),
+      error_y: { type: 'data', visible: true, thickness: 1,
+        array: dims.map(d => std(byDim[d], mean(byDim[d]))) },
+      customdata: dims.map(d => byDim[d].length),
+      line: { color: colorFor[combo] }, marker: { color: colorFor[combo] },
+      hovertemplate: `${combo}<br>latent Σ = %{x}<br>mean test F1 = %{y:.4f}<br>runs = %{customdata}<extra></extra>`,
+    };
+  });
+  Plotly.newPlot('latent-sweep-chart', traces, baseLayout({
+    title: 'Test F1 vs. VAE latent size (mean ± sd across seeds)',
+    xaxis: { title: 'VAE latent size (Σ active branches, log)', type: 'log' },
+    yaxis: { title: 'mean test F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (l) Confusion matrix of the single best run by test F1 (row-normalized).
+function renderConfusionMatrix() {
+  const runs = allRuns.filter(r => {
+    const t = (r.metrics && r.metrics.test) || {};
+    return ['tn', 'fp', 'fn', 'tp'].every(k => typeof t[k] === 'number') &&
+      r.test_f1 !== null && r.test_f1 !== undefined;
+  });
+  if (!runs.length) { chartEmpty('confusion-matrix-chart', 'No runs log a test confusion matrix (tn/fp/fn/tp).'); return; }
+  const r = [...runs].sort((a, b) => b.test_f1 - a.test_f1)[0];
+  const t = r.metrics.test;
+  const z = [[t.tn, t.fp], [t.fn, t.tp]];
+  const rowSum = [t.tn + t.fp, t.fn + t.tp];
+  const zNorm = z.map((row, i) => row.map(v => (rowSum[i] ? v / rowSum[i] : 0)));
+  const text = z.map((row, i) => row.map((v, j) => `${v}<br>(${(zNorm[i][j] * 100).toFixed(1)}%)`));
+  Plotly.newPlot('confusion-matrix-chart', [{
+    type: 'heatmap', z: zNorm, text, texttemplate: '%{text}',
+    x: ['predicted True/Real', 'predicted Fake'], y: ['actual True/Real', 'actual Fake'],
+    colorscale: 'Blues', zmin: 0, zmax: 1,
+    hovertemplate: '%{y} → %{x}<br>row-normalized = %{z:.3f}<extra></extra>',
+    colorbar: { title: 'row share' },
+  }], baseLayout({
+    title: `Confusion matrix — ${r.run_id} (${r.combo}), test F1 = ${fmtNum(r.test_f1)}`,
+    xaxis: { side: 'top' }, yaxis: { autorange: 'reversed', automargin: true },
+    margin: { t: 90, l: 140 },
+  }), CHART_CFG);
+}
+
+// (m) Per-topic test F1, grouped bars by extractor combination.
+function renderTopicBreakdown() {
+  const runs = allRuns.filter(r => r.topic_breakdown && typeof r.topic_breakdown === 'object');
+  if (!runs.length) { chartEmpty('topic-breakdown-chart', 'No runs carry a topic_breakdown block.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const topics = [...new Set(runs.flatMap(r => Object.keys(r.topic_breakdown)))];
+  const topicN = {};
+  topics.forEach(tp => {
+    const ns = runs.map(r => r.topic_breakdown[tp]).filter(Boolean).map(o => o.n || 0);
+    topicN[tp] = ns.length ? mean(ns) : 0;
+  });
+  topics.sort((a, b) => topicN[b] - topicN[a]);
+  const traces = combos.map(combo => {
+    const rs = runs.filter(r => r.combo === combo);
+    return {
+      type: 'bar', name: combo, marker: { color: colorFor[combo] },
+      x: topics,
+      y: topics.map(tp => {
+        const vals = rs.map(r => r.topic_breakdown[tp]).filter(Boolean)
+          .map(o => o.f1).filter(v => typeof v === 'number');
+        return vals.length ? mean(vals) : null;
+      }),
+      customdata: topics.map(tp => Math.round(topicN[tp])),
+      hovertemplate: `${combo}<br>%{x}<br>mean topic F1 = %{y:.3f}<br>~%{customdata} articles<extra></extra>`,
+    };
+  });
+  Plotly.newPlot('topic-breakdown-chart', traces, baseLayout({
+    title: 'Per-topic test F1 (mean across runs), grouped by extractor combination',
+    barmode: 'group', xaxis: { tickangle: -35 },
+    yaxis: { title: 'mean topic F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.35 }, margin: { t: 40, b: 130 },
+  }), CHART_CFG);
+}
+
+// (n) Precision vs. recall scatter with dotted iso-F1 contours.
+function renderPrecisionRecall() {
+  const runs = allRuns.filter(r =>
+    typeof chartTestMetric(r, 'precision') === 'number' &&
+    typeof chartTestMetric(r, 'recall') === 'number');
+  if (!runs.length) { chartEmpty('precision-recall-chart', 'No runs log test precision/recall.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const iso = [0.5, 0.6, 0.7, 0.8, 0.9].map(f => {
+    const xs = [], ys = [];
+    for (let rc = 0.02; rc <= 1.0001; rc += 0.02) {
+      const pr = (f * rc) / (2 * rc - f);
+      if (pr > 0 && pr <= 1) { xs.push(rc); ys.push(pr); }
+    }
+    return { type: 'scatter', mode: 'lines', x: xs, y: ys, name: `F1=${f}`,
+      line: { dash: 'dot', width: 1, color: 'rgba(120,120,120,0.5)' },
+      hoverinfo: 'skip', showlegend: false };
+  });
+  const pts = combos.map(combo => {
+    const rs = runs.filter(r => r.combo === combo);
+    return {
+      type: 'scatter', mode: 'markers', name: combo,
+      x: rs.map(r => chartTestMetric(r, 'recall')),
+      y: rs.map(r => chartTestMetric(r, 'precision')),
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(combo)}<br>F1 = ${fmtNum(r.test_f1)}`),
+      hovertemplate: '%{text}<br>recall = %{x:.3f}<br>precision = %{y:.3f}<extra></extra>',
+      marker: { size: 8, color: colorFor[combo], opacity: 0.8, line: { width: 0.5, color: 'rgba(0,0,0,0.3)' } },
+    };
+  });
+  Plotly.newPlot('precision-recall-chart', [...iso, ...pts], baseLayout({
+    title: 'Precision vs. recall on test (dotted = iso-F1 lines)',
+    xaxis: { title: 'recall (Fake)', range: [0, 1] },
+    yaxis: { title: 'precision (Fake)', range: [0, 1] },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (o) Efficiency frontier: test F1 vs. KAN parameter count, with the Pareto
+// step line (best F1 reachable at each budget).
+function renderParetoEfficiency() {
+  const runs = allRuns.filter(r =>
+    r.test_f1 !== null && r.test_f1 !== undefined && typeof r.num_parameters === 'number');
+  if (!runs.length) { chartEmpty('pareto-chart', 'No runs log num_parameters together with a test F1.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const sorted = [...runs].sort((a, b) => a.num_parameters - b.num_parameters);
+  const frontier = [];
+  let best = -Infinity;
+  sorted.forEach(r => { if (r.test_f1 > best) { frontier.push(r); best = r.test_f1; } });
+  const pts = combos.map(combo => {
+    const rs = runs.filter(r => r.combo === combo);
+    return {
+      type: 'scatter', mode: 'markers', name: combo,
+      x: rs.map(r => r.num_parameters), y: rs.map(r => r.test_f1),
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(combo)}`
+        + `<br>${r.num_parameters.toLocaleString()} params`
+        + (r.training_time_seconds != null ? `<br>${r.training_time_seconds.toFixed(1)} s` : '')),
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra></extra>',
+      marker: { size: 8, color: colorFor[combo], opacity: 0.8, line: { width: 0.5, color: 'rgba(0,0,0,0.3)' } },
+    };
+  });
+  const frontierTrace = {
+    type: 'scatter', mode: 'lines+markers', name: 'Pareto frontier',
+    x: frontier.map(r => r.num_parameters), y: frontier.map(r => r.test_f1),
+    line: { color: '#111827', width: 2, shape: 'hv' }, marker: { size: 6, color: '#111827' },
+    hoverinfo: 'skip',
+  };
+  Plotly.newPlot('pareto-chart', [frontierTrace, ...pts], baseLayout({
+    title: 'Test F1 vs. KAN parameter count (black step = best F1 at each budget)',
+    xaxis: { title: '# KAN parameters (log)', type: 'log' },
+    yaxis: { title: 'test F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (p) Parallel coordinates over the hyperparameters that actually vary,
+// ending in test F1; line color = test F1.
+function renderParallelCoords() {
+  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!runs.length) { chartEmpty('parcoords-chart', 'No runs with a test F1.'); return; }
+  const candidates = [
+    { label: 'num_basis', get: r => (r.kan_hyperparams || {}).num_basis },
+    { label: 'hidden_dim', get: r => (r.kan_hyperparams || {}).hidden_dim },
+    { label: 'weight_decay (log10)', get: r => {
+        const v = (r.kan_hyperparams || {}).weight_decay;
+        return (typeof v === 'number' && v > 0) ? Math.log10(v) : null; } },
+    { label: 'kan_dropout', get: r => (r.kan_hyperparams || {}).dropout },
+    { label: 'vae_beta', get: r => (r.vae_hyperparams || {}).beta },
+    { label: 'vae_dropout', get: r => (r.vae_hyperparams || {}).dropout },
+    { label: 'latent Σ (log2)', get: r => {
+        const v = chartLatentSum(r);
+        return v > 0 ? Math.log2(v) : null; }, logRaw: r => chartLatentSum(r) },
+  ];
+  const active = candidates.filter(c => {
+    const vals = runs.map(c.get);
+    if (vals.some(v => typeof v !== 'number')) return false;
+    return new Set(vals).size > 1;
+  });
+  if (!active.length) { chartEmpty('parcoords-chart', 'No hyperparameter varied across the loaded runs.'); return; }
+  const dims = active.map(c => {
+    const dim = { label: c.label, values: runs.map(c.get) };
+    if (c.logRaw) {
+      // parcoords has no per-axis log scale -- values are log2-transformed, so
+      // relabel the ticks with the real latent sizes.
+      const real = [...new Set(runs.map(c.logRaw).filter(v => v > 0))].sort((a, b) => a - b);
+      dim.tickvals = real.map(v => Math.log2(v));
+      dim.ticktext = real.map(String);
+    }
+    return dim;
+  });
+  dims.push({ label: 'test F1', values: runs.map(r => r.test_f1) });
+  Plotly.newPlot('parcoords-chart', [{
+    type: 'parcoords',
+    line: { color: runs.map(r => r.test_f1), colorscale: 'Blues', cmin: 0, cmax: 1,
+      showscale: true, colorbar: { title: 'test F1' } },
+    dimensions: dims,
+  }], baseLayout({
+    title: 'Each line = one run; drag along an axis to filter',
+    margin: { t: 60, l: 80, r: 60, b: 30 },
+  }), CHART_CFG);
+}
+
+// (q) Seed variance: test F1 by random seed, strip/box per combination.
+function renderSeedStrip() {
+  const runs = allRuns.filter(r =>
+    r.test_f1 !== null && r.test_f1 !== undefined && r.seed !== null && r.seed !== undefined);
+  if (!runs.length) { chartEmpty('seed-strip-chart', 'No runs log a seed together with a test F1.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const seeds = [...new Set(runs.map(r => r.seed))].sort((a, b) => a - b).map(String);
+  const traces = combos.map(combo => {
+    const rs = runs.filter(r => r.combo === combo);
+    return {
+      type: 'box', name: combo, marker: { color: colorFor[combo], size: 5 },
+      line: { color: colorFor[combo] }, fillcolor: 'rgba(0,0,0,0)',
+      x: rs.map(r => String(r.seed)), y: rs.map(r => r.test_f1),
+      boxpoints: 'all', jitter: 0.6, pointpos: 0,
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(combo)}<br>seed ${r.seed}`),
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra></extra>',
+    };
+  });
+  Plotly.newPlot('seed-strip-chart', traces, baseLayout({
+    title: 'Test F1 by random seed — how much variance is initialization luck?',
+    boxmode: 'group',
+    xaxis: { title: 'seed', type: 'category', categoryorder: 'array', categoryarray: seeds },
+    yaxis: { title: 'test F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (r) Overfitting slope chart: train -> val -> test accuracy, one line per run.
+function renderSlopeChart() {
+  const runs = allRuns.filter(r => {
+    const m = r.metrics || {};
+    return ['train', 'val', 'test'].every(s => m[s] && typeof m[s].accuracy === 'number');
+  });
+  if (!runs.length) { chartEmpty('slope-chart', 'No runs log train/val/test accuracy.'); return; }
+  const traces = runs.map(r => {
+    const gap = r.metrics.train.accuracy - r.metrics.test.accuracy;
+    const warn = Math.abs(gap) >= gapThreshold;
+    return {
+      type: 'scatter', mode: 'lines+markers', showlegend: false,
+      x: ['train', 'val', 'test'],
+      y: [r.metrics.train.accuracy, r.metrics.val.accuracy, r.metrics.test.accuracy],
+      line: { color: warn ? 'rgba(220,38,38,0.55)' : 'rgba(37,99,235,0.35)', width: warn ? 2 : 1 },
+      marker: { size: 4, color: warn ? '#dc2626' : '#2563eb' },
+      text: `${r.run_id} (${r.combo})`,
+      hovertemplate: `%{text}<br>%{x} acc = %{y:.4f}<br>gap train−test = ${gap.toFixed(3)}<extra></extra>`,
+    };
+  });
+  Plotly.newPlot('slope-chart', traces, baseLayout({
+    title: `Accuracy across splits per run (red = |train−test gap| ≥ ${gapThreshold})`,
+    xaxis: { title: '' }, yaxis: { title: 'accuracy', rangemode: 'tozero' },
+    margin: { t: 40, b: 50 },
+  }), CHART_CFG);
+}
+
+// (s) Dumbbell: mean F1 on normal folds vs. source-disjoint folds, per combo.
+function renderDumbbell() {
+  const kf = allRuns.filter(r => r.corpus_mode === 'kfold' && r.test_f1 !== null && r.test_f1 !== undefined);
+  const dj = allRuns.filter(r => r.corpus_mode === 'source_disjoint' && r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!kf.length || !dj.length) {
+    chartEmpty('dumbbell-chart', 'Needs runs from both --corpus_mode kfold and source_disjoint.');
+    return;
+  }
+  const meanByCombo = rs => {
+    const g = {};
+    rs.forEach(r => { (g[r.combo] = g[r.combo] || []).push(r.test_f1); });
+    const m = {};
+    Object.entries(g).forEach(([c, v]) => { m[c] = mean(v); });
+    return m;
+  };
+  const a = meanByCombo(kf), b = meanByCombo(dj);
+  const combos = chartComboOrder([...kf, ...dj]).filter(c => (c in a) && (c in b));
+  if (!combos.length) { chartEmpty('dumbbell-chart', 'No combination has both normal and disjoint runs.'); return; }
+  const shapes = combos.map(c => ({
+    type: 'line', x0: a[c], x1: b[c], y0: c, y1: c,
+    line: { color: 'rgba(120,120,120,0.6)', width: 2 },
+  }));
+  Plotly.newPlot('dumbbell-chart', [
+    { type: 'scatter', mode: 'markers', name: 'Normal folds', x: combos.map(c => a[c]), y: combos,
+      marker: { size: 11, color: '#2563eb' },
+      hovertemplate: '%{y}<br>normal F1 = %{x:.4f}<extra></extra>' },
+    { type: 'scatter', mode: 'markers', name: 'Disjoint folds', x: combos.map(c => b[c]), y: combos,
+      marker: { size: 11, color: '#dc2626' },
+      hovertemplate: '%{y}<br>disjoint F1 = %{x:.4f}<extra></extra>' },
+  ], baseLayout({
+    title: 'Mean test F1: normal folds vs. disjoint folds (gap = outlet-leakage cost)',
+    shapes, xaxis: { title: 'mean test F1', rangemode: 'tozero' },
+    yaxis: { automargin: true }, legend: { orientation: 'h', y: -0.25 },
+    margin: { t: 40, b: 70, l: 160 },
+  }), CHART_CFG);
+}
+
+// (t) Diverging calibration bars: ECE (left) vs. Brier (right), per combo.
+function renderCalibrationDiverging() {
+  const runs = allRuns.filter(r =>
+    typeof r.test_ece === 'number' && typeof r.test_brier_score === 'number');
+  if (!runs.length) { chartEmpty('calibration-diverging-chart', 'No runs log test ECE/Brier.'); return; }
+  const g = {};
+  runs.forEach(r => { (g[r.combo] = g[r.combo] || []).push(r); });
+  const combos = Object.keys(g).sort((x, y) =>
+    mean(g[y].map(r => r.test_ece)) - mean(g[x].map(r => r.test_ece)));
+  const ece = combos.map(c => mean(g[c].map(r => r.test_ece)));
+  const brier = combos.map(c => mean(g[c].map(r => r.test_brier_score)));
+  Plotly.newPlot('calibration-diverging-chart', [
+    { type: 'bar', orientation: 'h', name: 'ECE', y: combos, x: ece.map(v => -v),
+      marker: { color: '#b45309' }, customdata: ece,
+      hovertemplate: '%{y}<br>mean ECE = %{customdata:.4f}<extra></extra>' },
+    { type: 'bar', orientation: 'h', name: 'Brier', y: combos, x: brier,
+      marker: { color: '#2563eb' },
+      hovertemplate: '%{y}<br>mean Brier = %{x:.4f}<extra></extra>' },
+  ], baseLayout({
+    title: 'Calibration by combination — ECE (left) vs. Brier (right); shorter is better',
+    barmode: 'overlay',
+    xaxis: { title: '←  ECE      Brier  →',
+      tickvals: [-0.2, -0.1, 0, 0.1, 0.2], ticktext: ['0.20', '0.10', '0', '0.10', '0.20'] },
+    yaxis: { automargin: true }, legend: { orientation: 'h', y: -0.25 },
+    margin: { t: 40, b: 70, l: 160 },
+  }), CHART_CFG);
+}
+
+// (u) Scatterplot matrix of test metrics, colored by combination.
+function renderMetricsSplom() {
+  const keys = [['f1', 'F1'], ['roc_auc', 'ROC-AUC'], ['pr_auc', 'PR-AUC'], ['mcc', 'MCC'], ['ece', 'ECE']];
+  const runs = allRuns.filter(r => keys.some(([k]) => typeof chartTestMetric(r, k) === 'number'));
+  if (runs.length < 3) { chartEmpty('splom-chart', 'Need at least 3 runs with test metrics.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const dims = keys
+    .filter(([k]) => runs.some(r => typeof chartTestMetric(r, k) === 'number'))
+    .map(([k, label]) => ({ label, values: runs.map(r => chartTestMetric(r, k)) }));
+  const marker = combos.length < 2
+    ? { color: colorFor[combos[0]], size: 5, opacity: 0.7 }
+    : { color: runs.map(r => combos.indexOf(r.combo)), size: 5, opacity: 0.7,
+        line: { width: 0.3, color: 'rgba(0,0,0,0.3)' },
+        colorscale: combos.map((c, i) => [i / (combos.length - 1), colorFor[c]]) };
+  Plotly.newPlot('splom-chart', [{
+    type: 'splom', dimensions: dims, diagonal: { visible: false },
+    text: runs.map(r => `${r.run_id}<br>${r.combo}`),
+    hovertemplate: '%{text}<extra></extra>', marker,
+  }], baseLayout({
+    title: 'Pairwise scatter of test metrics (color = combination)',
+    margin: { t: 50 },
+  }), CHART_CFG);
+}
+
+// (v) Bump chart: combination rank by mean test F1, fold by fold.
+function renderBumpChart() {
+  const runs = allRuns.filter(r =>
+    r.corpus_fold !== null && r.corpus_fold !== undefined &&
+    r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!runs.length) { chartEmpty('bump-chart', 'No fold-tagged runs with a test F1.'); return; }
+  const folds = [...new Set(runs.map(r => r.corpus_fold))].sort((a, b) => a - b);
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const rankByFold = {};
+  folds.forEach(f => {
+    const scored = combos.map(c => {
+      const v = runs.filter(r => r.corpus_fold === f && r.combo === c).map(r => r.test_f1);
+      return { c, m: v.length ? mean(v) : null };
+    }).filter(s => s.m !== null).sort((x, y) => y.m - x.m);
+    rankByFold[f] = {};
+    scored.forEach((s, i) => { rankByFold[f][s.c] = i + 1; });
+  });
+  const traces = combos.map(c => ({
+    type: 'scatter', mode: 'lines+markers', name: c, connectgaps: true,
+    x: folds.map(f => `Fold ${f}`),
+    y: folds.map(f => (rankByFold[f][c] === undefined ? null : rankByFold[f][c])),
+    line: { color: colorFor[c], width: 2 }, marker: { size: 9, color: colorFor[c] },
+    hovertemplate: `${c}<br>%{x}<br>rank %{y}<extra></extra>`,
+  }));
+  Plotly.newPlot('bump-chart', traces, baseLayout({
+    title: 'Combination rank by mean test F1, fold by fold (1 = best)',
+    xaxis: { title: 'fold' },
+    yaxis: { title: 'rank', autorange: 'reversed', dtick: 1 },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (w) Prediction-entropy distribution by combination (violin).
+function renderEntropyViolin() {
+  const runs = allRuns.filter(r => typeof chartTestMetric(r, 'entropy_mean') === 'number');
+  if (!runs.length) { chartEmpty('entropy-violin-chart', 'No runs log test entropy_mean.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const traces = combos.map(c => {
+    const rs = runs.filter(r => r.combo === c);
+    return {
+      type: 'violin', name: c, y: rs.map(r => chartTestMetric(r, 'entropy_mean')),
+      points: 'all', jitter: 0.5, box: { visible: true }, meanline: { visible: true },
+      line: { color: colorFor[c] }, fillcolor: `${colorFor[c]}22`,
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(c)}`),
+      hovertemplate: '%{text}<br>mean entropy = %{y:.4f}<extra></extra>',
+    };
+  });
+  Plotly.newPlot('entropy-violin-chart', traces, baseLayout({
+    title: 'Mean prediction entropy by combination (low = confident, ~0.69 nats = maximally unsure)',
+    yaxis: { title: 'mean predictive entropy (nats)', rangemode: 'tozero' },
+    showlegend: false, margin: { t: 40, b: 60 },
+  }), CHART_CFG);
+}
+
+// (x) Empirical CDF of test F1 -- overall plus one dotted curve per combo.
+function renderF1Ecdf() {
+  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!runs.length) { chartEmpty('f1-ecdf-chart', 'No runs with a test F1.'); return; }
+  const combos = chartComboOrder(runs);
+  const colorFor = chartComboColors(combos);
+  const mk = (label, rs, color, dash) => {
+    const xs = rs.map(r => r.test_f1).sort((a, b) => a - b);
+    const n = xs.length;
+    return {
+      type: 'scatter', mode: 'lines', name: `${label} (n=${n})`,
+      x: xs, y: xs.map((_, i) => (i + 1) / n),
+      line: { shape: 'hv', color, dash },
+      hovertemplate: `${label}<br>test F1 ≤ %{x:.3f}<br>share of runs = %{y:.2f}<extra></extra>`,
+    };
+  };
+  const traces = [mk('all runs', runs, '#111827', 'solid')];
+  combos.forEach(c => traces.push(mk(c, runs.filter(r => r.combo === c), colorFor[c], 'dot')));
+  Plotly.newPlot('f1-ecdf-chart', traces, baseLayout({
+    title: 'Empirical CDF of test F1 (further right / steeper = better and more consistent)',
+    xaxis: { title: 'test F1', range: [0, 1] },
+    yaxis: { title: 'cumulative share of runs', range: [0, 1] },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
+  }), CHART_CFG);
+}
+
+// (y) Individual extractors, not combinations: for each of the four feature
+// branches, the test-F1 distribution over every run where that branch is
+// active vs. every run where it is not (a combo run counts toward each of its
+// branches). Answers "does this one modality help on its own terms?".
+function renderF1ByExtractor() {
+  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  if (!runs.length) { chartEmpty('extractor-f1-chart', 'No runs with a test F1.'); return; }
+
+  const EXTRACTORS = ['semantic', 'emotion', 'style', 'context'];
+  const px = [], py = [], ptext = [], ax = [], ay = [], atext = [];
+  EXTRACTORS.forEach(k => {
+    runs.forEach(r => {
+      const on = r.active_extractors.includes(k);
+      (on ? px : ax).push(k);
+      (on ? py : ay).push(r.test_f1);
+      (on ? ptext : atext).push(`${escapeHtml(r.run_id)}<br>${escapeHtml(r.combo)}<br>seed ${r.seed ?? '—'}`);
+    });
+  });
+
+  const boxOpts = { type: 'box', boxpoints: 'all', jitter: 0.5, pointpos: 0, boxmean: 'sd' };
+  Plotly.newPlot('extractor-f1-chart', [
+    Object.assign({}, boxOpts, {
+      name: 'extractor present', x: px, y: py, text: ptext,
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra>present</extra>',
+      marker: { size: 4, color: '#2563eb' }, line: { color: '#2563eb' },
+      fillcolor: 'rgba(37,99,235,0.10)',
+    }),
+    Object.assign({}, boxOpts, {
+      name: 'extractor absent', x: ax, y: ay, text: atext,
+      hovertemplate: '%{text}<br>test F1 = %{y:.4f}<extra>absent</extra>',
+      marker: { size: 4, color: '#9ca3af' }, line: { color: '#9ca3af' },
+      fillcolor: 'rgba(156,163,175,0.10)',
+    }),
+  ], baseLayout({
+    title: 'Test F1 by individual extractor — runs where it is active vs. inactive',
+    boxmode: 'group',
+    xaxis: { title: 'feature extractor', type: 'category', categoryorder: 'array', categoryarray: EXTRACTORS },
+    yaxis: { title: 'test F1', rangemode: 'tozero' },
+    legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 70 },
+  }), CHART_CFG);
+}
+
 // =====================================================
 // Orchestration
 // =====================================================
@@ -889,6 +1953,28 @@ function renderAll() {
   renderBarChart();
   renderHeatmap();
   renderCalibrationScatters();
+  renderCombo3DScatter();
+  renderF1Boxplot();
+  renderF1ByComboBoxplot();
+  renderF1ByFoldBars();
+  renderKanParamsHeatmap();
+  renderNeuronsVariationChart();
+  renderLatentVsVolumeScatter();
+  renderLatentSweep();
+  renderConfusionMatrix();
+  renderTopicBreakdown();
+  renderPrecisionRecall();
+  renderParetoEfficiency();
+  renderParallelCoords();
+  renderSeedStrip();
+  renderSlopeChart();
+  renderDumbbell();
+  renderCalibrationDiverging();
+  renderMetricsSplom();
+  renderBumpChart();
+  renderEntropyViolin();
+  renderF1Ecdf();
+  renderF1ByExtractor();
 }
 </script>
 </body>
