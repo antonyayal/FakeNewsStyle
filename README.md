@@ -333,20 +333,50 @@ Every seed with full context outperformed every seed without Source/Domain
 identity (non-overlapping ranges) — context stripped of outlet identity is
 statistically indistinguishable from dropping it entirely. In other words,
 **the identity-free performance ceiling of this pipeline on the current
-split is closer to F1 ≈ 0.75–0.76**, not the ≈0.90 the full pipeline
-reports; Topic and article age carry essentially no signal on their own.
-Results and discussion involving `context` or aggregate F1 should note this
-explicitly, since a meaningful share of it reflects source classification
-rather than fake-news style detection. A source-disjoint re-split (no
-outlet appearing in both train and test) would give a cleaner read on this
-across every branch, not just `context` — `--corpus_mode source_disjoint`
-(see "Corpus mode" above and `src/data/source_split_corpus.py`) and
-`scripts/orchestrator_phase5.py` (Phase 5) implement this; as of this
-writing the experiment plan has just been redesigned (5 phases, 5 fixed
-seeds — see "Experiment orchestration" above) and the previous run's
-results were archived (`results_old/`), so Phase 5 hasn't been run yet
-against the new plan's Phase 3 winning config (`results/phase3_top.json`,
-once Phases 1–3 complete).
+split may be closer to F1 ≈ 0.75–0.76**, not the ≈0.90 the full pipeline
+reports; Topic and article age appear to carry little signal on their own.
+Results and discussion involving `context` or aggregate F1 should flag this
+possibility, since some share of it plausibly reflects source
+classification rather than fake-news style detection — though this
+ablation alone isolates the *feature* (removing Source/Domain from
+`context`), not the *split* (train and test can still share outlets), so it
+doesn't by itself rule out other explanations for the gap.
+
+**Update (2026-09-02/03) — suggestive, not yet conclusive.** A
+source-disjoint re-split (no outlet appearing in both train and test,
+`--corpus_mode source_disjoint` / `src/data/source_split_corpus.py`,
+Phase 5) is the complementary check that isolates the *split* instead of
+the feature, and it has now run once, end to end, against a completed
+Phase 3: test F1 for the 5 winning configs dropped to roughly **0.30–0.53**
+across folds and seeds — well below even the identity-free ceiling above.
+This is consistent with the leakage hypothesis, but two things keep it from
+being read as a confirmed number yet:
+
+- The source-disjoint folds have highly uneven outlet-group sizes (see
+  `src/data/source_split_corpus.py`), so some of that collapse's variance
+  (a few fold/seed combinations landed near F1 ≈ 0) may reflect fold
+  instability or distribution shift rather than leakage specifically —
+  the two effects aren't yet separated.
+- A separate, unrelated bug was found and fixed the same day: Phase 1–5's
+  orchestrators (`scripts/experiment_runner.py`, `scripts/aggregate_results.py`)
+  were selecting each phase's "winning" config by *test* F1 instead of
+  *validation* F1, which overfits every reported winner to the test set via
+  search — independent of, and on top of, the Source/Domain leakage above.
+  The fix changes which configs Phase 3/4/5 even carry forward, so the
+  0.30–0.53 figure is from a run that predates it and needs to be
+  reproduced under the corrected criterion before it's citable as final.
+
+A new **Phase 6** (`scripts/orchestrator_phase6.py`) was added to close
+this out properly: it re-runs the full Phase 1→5 protocol with `context`'s
+Source/Domain embeddings switched off from the start (rather than as a
+one-off ablation), so extractor-combo selection, hyperparameter tuning, and
+fold validation all happen under identity-free `context` end to end. It has
+been built and dry-run-verified but not yet executed for real, so it has no
+results to report yet. Until both the val/test fix's re-run and Phase 6
+complete, treat the leakage's exact magnitude as **an open, actively
+investigated question — plausible and reasonably well-motivated, not an
+established fact** — and avoid citing the ≈0.90 full-pipeline F1 without
+this caveat.
 
 ---
 
