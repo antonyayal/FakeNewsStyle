@@ -122,7 +122,18 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
     callers that only pass --run_vaes (ensure_vae_latents/resolve_kan_input
     in orchestrator_phase1.py/orchestrator_phase2.py) must pass
     require_results_json=False -- otherwise a successful VAE-only run
-    (returncode 0, no results JSON to find) is misreported as failed."""
+    (returncode 0, no results JSON to find) is misreported as failed.
+
+    Returns both val_metrics and test_metrics (main.py's results JSON always
+    has all three of train/val/test). val_metrics is what orchestrators must
+    rank/select configs on -- test must never influence which config wins,
+    only report how the already-chosen winner does on genuinely held-out
+    data. (Before 2026-09-02 this returned test_metrics alone under the key
+    "test_metrics" and callers used it for ranking -- see
+    dataset_source_label_leakage / experiment_phases_status memory for why
+    that was wrong: with ~860 KAN runs comparing configs, selecting by test
+    F1 directly overfits every "winner" to the test set via search, on top
+    of and independent from the Source/Domain leakage issue.)"""
 
     start = time.time()
     try:
@@ -145,6 +156,7 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
             "stderr": "",
             "error": f"subprocess.run raised: {exc}",
             "results_json": None,
+            "val_metrics": None,
             "test_metrics": None,
         }
 
@@ -152,6 +164,7 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
     results_json = match.group(1) if match else None
 
     error = None
+    val_metrics = None
     test_metrics = None
 
     if returncode != 0:
@@ -167,9 +180,10 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
         try:
             with open(results_path, "r", encoding="utf-8") as f:
                 record = json.load(f)
+            val_metrics = record["metrics"]["val"]
             test_metrics = record["metrics"]["test"]
         except Exception as exc:
-            error = f"Could not read test metrics from {results_path}: {exc}"
+            error = f"Could not read val/test metrics from {results_path}: {exc}"
 
     return {
         "returncode": returncode,
@@ -178,6 +192,7 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
         "stderr": stderr,
         "error": error,
         "results_json": results_json,
+        "val_metrics": val_metrics,
         "test_metrics": test_metrics,
     }
 
@@ -190,7 +205,12 @@ def execute_and_log(
     meta: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Runs cmd, then appends one JSON-lines record (ok or failed) merging
-    `meta` (phase/group/config metadata) with the outcome. Never raises."""
+    `meta` (phase/group/config metadata) with the outcome. Never raises.
+
+    "metrics" holds VAL split metrics -- this is what aggregate_results.py's
+    RANKING_METRIC sorts/selects on. "test_metrics" holds the TEST split,
+    carried along purely for final reporting on whichever config val
+    already chose; it must never be used to pick a winner."""
 
     outcome = run_main_command(cmd)
     status = "ok" if outcome["error"] is None else "failed"
@@ -205,7 +225,8 @@ def execute_and_log(
         "results_json": outcome["results_json"],
         "elapsed_seconds": outcome["elapsed_seconds"],
         "timestamp": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "metrics": outcome["test_metrics"],
+        "metrics": outcome["val_metrics"],
+        "test_metrics": outcome["test_metrics"],
     }
 
     append_jsonl(jsonl_path, record)

@@ -39,6 +39,12 @@ METRIC_COLUMNS = [
     "entropy_mean", "entropy_std", "n_params", "train_time_sec",
 ]
 
+# Bare names (accuracy, f1, ...) are VAL split -- ranking/selection happens
+# only on these. test_-prefixed names are TEST split, aggregated purely for
+# reporting how the val-selected winner does on genuinely held-out data;
+# never sort/select on these.
+TEST_METRIC_COLUMNS = [f"test_{c}" for c in METRIC_COLUMNS]
+
 
 def load_runs(jsonl_path: Path) -> pd.DataFrame:
     """Reads the JSONL, keeps only status=='ok' rows, flattens metrics.* to
@@ -61,8 +67,10 @@ def load_runs(jsonl_path: Path) -> pd.DataFrame:
             if record.get("status") != "ok" or not record.get("metrics"):
                 continue
 
-            row = {k: v for k, v in record.items() if k != "metrics"}
-            row.update(record["metrics"])
+            row = {k: v for k, v in record.items() if k not in ("metrics", "test_metrics")}
+            row.update(record["metrics"])  # val split -- bare names, used for ranking
+            if record.get("test_metrics"):
+                row.update({f"test_{k}": v for k, v in record["test_metrics"].items()})
             rows.append(row)
 
     if not rows:
@@ -92,7 +100,7 @@ def aggregate_by_config(df: pd.DataFrame, group_by: str, metric: str = RANKING_M
     work = df.copy()
     work["_config_key"] = _group_key_column(work, group_by)
 
-    available_cols = [c for c in METRIC_COLUMNS if c in work.columns]
+    available_cols = [c for c in METRIC_COLUMNS + TEST_METRIC_COLUMNS if c in work.columns]
 
     agg = work.groupby("_config_key")[available_cols].agg(["mean", "std", "count"])
     agg.columns = [f"{col}_{stat}" for col, stat in agg.columns]

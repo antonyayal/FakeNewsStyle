@@ -34,6 +34,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+import pandas as pd
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -172,13 +174,16 @@ def summarize() -> None:
         entries = []
         for rank, (_, row) in enumerate(branch_ranking.iterrows(), start=1):
             dim = int(row["config"].split("::dim", 1)[1])
-            print(f"  {rank}. dim={dim}  {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
-                  f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])})")
+            test_col = f"test_{RANKING_METRIC}_mean"
+            test_str = f"  (test {RANKING_METRIC}={row[test_col]:.4f})" if test_col in row and pd.notna(row[test_col]) else ""
+            print(f"  {rank}. dim={dim}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
+                  f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])}){test_str}")
             entries.append({
                 "dim": dim,
                 f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
                 f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
                 "n_runs": int(row[f"{RANKING_METRIC}_count"]),
+                **({f"test_{RANKING_METRIC}_mean": float(row[test_col])} if test_col in row and pd.notna(row[test_col]) else {}),
             })
         by_branch[branch] = entries
 

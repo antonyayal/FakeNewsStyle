@@ -24,10 +24,13 @@ directory is namespaced per config, not just per fold:
 
 Produces two outputs:
   - {phase}_per_fold.json: full per-config x per-fold stats (mean/std/min/max
-    over the 5 seeds).
+    over the 5 seeds), for both the VAL split (selection metric, bare names)
+    and TEST split (test_-prefixed, reported only, never used to pick the
+    winner).
   - {phase}_top.json: a single global winner -- the config with the best
-    mean metric across all N folds x 5 seeds combined (not one winner per
-    fold).
+    mean VAL metric across all N folds x 5 seeds combined (not one winner
+    per fold) -- plus that same winner's TEST metric alongside, for an
+    honest read of its held-out performance.
 """
 
 from __future__ import annotations
@@ -246,7 +249,8 @@ def summarize(
                 "seed": record["seed"],
                 "active_extractors": record.get("active_extractors"),
                 "config": record.get("config"),
-                **record["metrics"],
+                **record["metrics"],  # val split -- bare names, used for ranking/winner selection
+                **{f"test_{k}": v for k, v in (record.get("test_metrics") or {}).items()},
             })
 
     if not rows:
@@ -257,8 +261,11 @@ def summarize(
 
     per_label_summary: Dict[str, Any] = {}
     global_rows = []
+    test_col = f"test_{RANKING_METRIC}"
+    has_test = test_col in df.columns
+
     for label, group in df.groupby("entry_label"):
-        print(f"\n=== {label} -- per-fold test {RANKING_METRIC} (n={len(SEEDS)} seeds each) ===")
+        print(f"\n=== {label} -- per-fold val {RANKING_METRIC} (n={len(SEEDS)} seeds each) ===")
         per_fold = group.groupby("fold")[RANKING_METRIC].agg(["mean", "std", "min", "max", "count"])
         print(per_fold.to_string())
 
@@ -270,8 +277,12 @@ def summarize(
             "n_runs": int(len(group)),
             "n_folds": int(group["fold"].nunique()),
         }
+        if has_test:
+            global_stats[f"test_{RANKING_METRIC}_mean"] = float(group[test_col].mean())
+            global_stats[f"test_{RANKING_METRIC}_std"] = float(group[test_col].std())
+        test_str = f"  (test {RANKING_METRIC}={global_stats[f'test_{RANKING_METRIC}_mean']:.4f})" if has_test else ""
         print(f"  global: mean={global_stats[f'{RANKING_METRIC}_mean']:.4f} "
-              f"std={global_stats[f'{RANKING_METRIC}_std']:.4f} (n={global_stats['n_runs']})")
+              f"std={global_stats[f'{RANKING_METRIC}_std']:.4f} (n={global_stats['n_runs']}){test_str}")
 
         per_label_summary[label] = {
             "active_extractors": group.iloc[0]["active_extractors"],

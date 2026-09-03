@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -206,8 +208,10 @@ def summarize(configs: List[Dict[str, Any]]) -> None:
         combo = [m for m in ALL_MODALITIES if m in label.split("_")]
         effective = {**PHASE3_BASELINE, **PHASE3_CANDIDATES[variant_label]}
 
-        print(f"  {i + 1}. {label} / {variant_label}  {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
-              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])})")
+        test_col = f"test_{RANKING_METRIC}_mean"
+        test_str = f"  (test {RANKING_METRIC}={row[test_col]:.4f})" if test_col in row and pd.notna(row[test_col]) else ""
+        print(f"  {i + 1}. {label} / {variant_label}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
+              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])}){test_str}")
         entries.append({
             "active_extractors": combo,
             "latent_dims": latent_by_label[label],
@@ -217,6 +221,7 @@ def summarize(configs: List[Dict[str, Any]]) -> None:
             f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
             f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
             "n_runs": int(row[f"{RANKING_METRIC}_count"]),
+            **({f"test_{RANKING_METRIC}_mean": float(row[test_col])} if test_col in row and pd.notna(row[test_col]) else {}),
         })
 
     PHASE3_TOP_JSON.parent.mkdir(parents=True, exist_ok=True)

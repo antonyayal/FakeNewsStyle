@@ -199,19 +199,22 @@ def summarize() -> None:
         combo = [m for m in ALL_MODALITIES if m in row["config"].split("+")]
         subset = combined[combined["active_extractors"].apply(lambda c: "+".join(c)) == row["config"]]
         if len(combo) == 1 and "dim" in subset.columns and subset["dim"].notna().any():
-            dims = {combo[0]: int(subset["dim"].iloc[0])}
+            dims = {combo[0]: int(subset["dim"].dropna().iloc[0])}
         else:
             dims = load_phase1_dims()
             dims = {b: dims[b] for b in combo}
 
-        print(f"  {i + 1}. {row['config']}  dims={dims}  {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
-              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])})")
+        test_col = f"test_{RANKING_METRIC}_mean"
+        test_str = f"  (test {RANKING_METRIC}={row[test_col]:.4f})" if test_col in row and pd.notna(row[test_col]) else ""
+        print(f"  {i + 1}. {row['config']}  dims={dims}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
+              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])}){test_str}")
         entries.append({
             "active_extractors": combo,
             "latent_dims": dims,
             f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
             f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
             "n_runs": int(row[f"{RANKING_METRIC}_count"]),
+            **({f"test_{RANKING_METRIC}_mean": float(row[test_col])} if test_col in row and pd.notna(row[test_col]) else {}),
         })
 
     PHASE2_TOP_JSON.parent.mkdir(parents=True, exist_ok=True)
