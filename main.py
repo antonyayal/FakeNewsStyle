@@ -262,6 +262,17 @@ parser.add_argument("--emotion_id_column", type=str, default="Id")
 
 # ---- style
 parser.add_argument("--extract_style", action="store_true")
+parser.add_argument(
+    "--style_feature_version",
+    type=int,
+    default=1,
+    choices=[1, 2],
+    help="Style feature set: 1 = original 35 features (default), "
+    "2 = +12 extra lexical/surface features (expressive punctuation, ALL-CAPS "
+    "words, degree adverbs, superlatives, hyperbolic quantifiers, urgency/alarm "
+    "cues, rhetorical questions, speech verbs, connector density + "
+    "narrative-vs-argumentative contrast, intrigue verbs) -> 47 features",
+)
 parser.add_argument("--style_input_dir", type=str, default=None)
 parser.add_argument("--style_text_column", type=str, default="text_xlmr")
 parser.add_argument("--style_id_column", type=str, default="Id")
@@ -618,6 +629,7 @@ if args.extract_style:
 
     style_extractor = StyleExtractor(
         StyleExtractorConfig(
+            feature_version=int(args.style_feature_version),
             spacy_model=args.style_spacy_model,
             compute_readability=not args.style_no_readability,
             compute_formality=not args.style_no_formality,
@@ -659,6 +671,7 @@ if args.extract_style:
                 "source_pkl": str(in_path),
                 "text_column": args.style_text_column,
                 "id_column": args.style_id_column,
+                "feature_version": int(args.style_feature_version),
             },
             log_dir=LOGS_STYLE_DIR,
             log_name=f"style_{split_name}.log",

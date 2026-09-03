@@ -4,11 +4,23 @@ Style feature extractor (spaCy/textstat/wordfreq stylometry, Spanish).
 
 Goal
 ----
-This module extracts ~35 stylometric features per sample -- readability,
+This module extracts stylometric features per sample -- readability,
 formality, syntactic complexity, lexical diversity, POS ratios, OOV rate,
 and punctuation/burstiness signals -- and saves them as a new PKL. These are
 the features that tend to separate fake vs. real news style, independent of
 semantic content.
+
+Feature-set version (StyleExtractorConfig.feature_version):
+- 1 (default): the original 35 features. Unchanged, so existing PKLs,
+  VAEs and experiments stay bit-identical.
+- 2: version 1 + 12 extra lexical/surface features (expressive punctuation
+  per word, interrobang density, emphatic ALL-CAPS words excluding known
+  acronyms, degree adverbs, -ísimo/-érrimo superlatives, hyperbolic
+  quantifiers, urgency/alarm cues incl. multi-word clickbait phrases,
+  rhetorical-question ratio, reported-speech verbs, connector density +
+  narrative-vs-argumentative contrast, perception/intrigue verbs)
+  -> 47 features. Verb groups are matched on spaCy lemmas when a doc is
+  available, on surface forms otherwise.
 
 Why this file exists
 --------------------
@@ -112,8 +124,136 @@ DEFAULT_SPANISH_STOPWORDS = {
 }
 
 
+# -------------------------------------------------------------------------
+# feature_version == 2 lexicons (only used when the extended feature set is
+# enabled; feature_version == 1 keeps exactly the original ~35 features).
+# -------------------------------------------------------------------------
+
+# Degree / intensifying adverbs (group 3: "intensificadores y superlativos").
+# Deliberately excludes ultra-frequent "muy" / "tan" -- their bare presence
+# barely discriminates in general Spanish (see note in the revision plan).
+DEFAULT_DEGREE_ADVERBS = {
+    "extremadamente", "totalmente", "completamente", "absolutamente",
+    "sumamente", "increíblemente", "tremendamente", "extraordinariamente",
+    "radicalmente", "profundamente", "enormemente", "brutalmente",
+    "terriblemente", "verdaderamente", "realmente", "definitivamente",
+}
+
+# Hyperbolic / universal quantifiers (group 3). Single words matched on the
+# token list; the phrases are matched as lowercased substrings.
+DEFAULT_HYPERBOLE_WORDS = {
+    "todos", "todas", "nadie", "siempre", "nunca", "jamás",
+}
+DEFAULT_HYPERBOLE_PHRASES = (
+    "absolutamente todos", "absolutamente todas", "cientos de", "miles de",
+    "millones de", "todo el mundo",
+)
+
+# Known acronyms / siglas to EXCLUDE from the emphatic-uppercase word ratio
+# (group 2), so "EEUU" / "OMS" / "PSOE" don't count as shouting.
+DEFAULT_SPANISH_ACRONYMS = {
+    "EEUU", "EE", "UU", "EUA", "ONU", "OTAN", "OEA", "OMS", "OMC", "OIT",
+    "FMI", "BM", "UE", "UNESCO", "UNICEF", "ACNUR", "FBI", "CIA", "NASA",
+    "ADN", "VIH", "SIDA", "COVID", "PIB", "IVA", "IPC", "DNI", "NIF", "IRPF",
+    "PP", "PSOE", "IU", "ERC", "PNV", "CIS", "RAE", "INE", "IMSS", "ISSSTE",
+    "SAT", "UNAM", "CDMX", "AMLO", "FIFA", "UEFA", "NBA", "ONG", "PYME",
+    "PYMES", "IA", "GPS", "USB", "CEO", "PIN", "SMS", "TIC", "LGTB", "LGBT",
+    "LGTBI", "OK", "TV", "CNN", "BBC", "AFP", "EFE",
+}
+
+# Urgency / alarm single-word lexicon (group 4). feature_version == 1 keeps
+# using the smaller DEFAULT_STYLE_INTENSIFIERS for sig_intensifier_ratio; v2
+# uses this list for the sig_alarm_cue_per_sent feature.
+DEFAULT_ALARM_LEXICON = {
+    "impactante", "increíble", "sorprendente", "alarmante", "escandaloso",
+    "urgente", "alerta", "emergencia", "crisis", "pánico", "catástrofe",
+    "peligro", "amenaza", "atención", "cuidado", "exclusiva", "bomba",
+    "escándalo",
+}
+
+# Multi-word clickbait / alarm cues (group 4), matched as lowercased substrings.
+DEFAULT_CLICKBAIT_PHRASES = (
+    "última hora", "no lo vas a creer", "esto cambia todo",
+    "lo que nadie te cuenta", "la verdad oculta",
+)
+
+# Reported-speech verbs (group: "discurso directo/citas"). Lemma set used when
+# spaCy is available; SURFACE set (common 3rd-person / gerund forms) is the
+# no-spaCy fallback.
+DEFAULT_SPEECH_VERB_LEMMAS = {
+    "decir", "afirmar", "asegurar", "declarar", "confesar", "revelar",
+    "admitir", "sostener", "señalar", "indicar", "comentar", "explicar",
+    "denunciar", "acusar", "responder", "agregar", "precisar", "subrayar",
+    "advertir", "negar", "reconocer",
+}
+DEFAULT_SPEECH_VERB_SURFACE = {
+    "dijo", "dijeron", "dice", "dicen", "afirmó", "afirma", "aseguró",
+    "asegura", "declaró", "declara", "confesó", "reveló", "revela",
+    "admitió", "admite", "sostuvo", "sostiene", "señaló", "señala",
+    "indicó", "indica", "comentó", "comenta", "explicó", "explica",
+    "denunció", "denuncia", "acusó", "acusa", "respondió", "responde",
+    "agregó", "agrega", "precisó", "subrayó", "advirtió", "advierte",
+    "negó", "niega", "reconoció", "reconoce",
+}
+
+# Perception / intrigue / suspense verbs (group: "verbos de percepción/intriga").
+DEFAULT_INTRIGUE_VERB_LEMMAS = {
+    "revelar", "descubrir", "ocultar", "sorprender", "desvelar", "destapar",
+    "esconder", "encubrir", "filtrar", "exponer", "desenmascarar", "delatar",
+    "sospechar", "intuir", "presentir", "advertir", "notar", "percatarse",
+    "adivinar", "vislumbrar",
+}
+DEFAULT_INTRIGUE_VERB_SURFACE = {
+    "revela", "reveló", "revelan", "revelaron", "descubre", "descubrió",
+    "descubren", "descubrieron", "oculta", "ocultó", "ocultan", "ocultaron",
+    "sorprende", "sorprendió", "sorprenden", "desvela", "desveló", "destapa",
+    "destapó", "esconde", "escondió", "encubre", "encubrió", "filtra",
+    "filtró", "filtraron", "expone", "expuso", "desenmascara", "delata",
+    "delató", "sospecha", "sospechó", "intuye", "presiente", "nota",
+    "notó", "adivina", "adivinó", "vislumbra",
+}
+
+# Narrative / temporal connectors vs. argumentative / logical connectors.
+# Multi-word entries are matched as lowercased substrings; single words via
+# the token list.
+DEFAULT_NARRATIVE_CONNECTORS = (
+    "entonces", "de repente", "luego", "después", "mientras tanto",
+    "en ese momento", "de pronto", "acto seguido", "al mismo tiempo",
+    "poco después", "finalmente", "al final", "tiempo después", "esa noche",
+    "ese día",
+)
+DEFAULT_ARGUMENT_CONNECTORS = (
+    "por lo tanto", "sin embargo", "no obstante", "en consecuencia",
+    "por consiguiente", "debido a", "ya que", "puesto que", "dado que",
+    "así pues", "en cambio", "por otro lado", "además", "asimismo",
+    "cabe destacar", "en resumen", "de hecho",
+)
+_NARR_SINGLE = {"entonces", "luego", "después", "finalmente"}
+_ARG_SINGLE = {"además", "asimismo", "aunque"}
+
+# Morphological superlative endings (group 3): buenísimo, grandísima,
+# paupérrimo, clarísimamente, ...
+_SUPERLATIVE_RE = re.compile(
+    r"(?:[íi]sim[oa]s?|[íi]simamente|[ée]rrim[oa]s?)$", flags=re.IGNORECASE
+)
+_INTERROBANG_RE = re.compile(r"(?:[!¡][?¿]|[?¿][!¡])[!?¡¿]*|‼|⁉")
+_ELLIPSIS_RE = re.compile(r"\.{3,}|…")
+_WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
+
+
 @dataclass
 class StyleExtractorConfig:
+    # Feature-set version:
+    #   1 = the original ~35 features (default -- keeps existing experiments
+    #       and PKLs bit-identical).
+    #   2 = version 1 + 12 extra lexical/surface features (expressive
+    #       punctuation per word, interrobang, emphatic ALL-CAPS words,
+    #       degree adverbs, superlatives, hyperbolic quantifiers,
+    #       urgency/alarm cues, rhetorical-question ratio, reported-speech
+    #       verbs, connector density + narrative-vs-argumentative contrast,
+    #       perception/intrigue verbs) -> 47 features.
+    feature_version: int = 1
+
     # spaCy model for Spanish (recommended)
     spacy_model: str = "es_core_news_sm"
 
@@ -170,8 +310,23 @@ class StyleExtractor:
 
     def __init__(self, config: StyleExtractorConfig = StyleExtractorConfig()):
         self.config = config
+        self.feature_version = int(getattr(config, "feature_version", 1) or 1)
         self.stopwords = config.stopwords or DEFAULT_SPANISH_STOPWORDS
         self.intensifiers = config.intensifiers or DEFAULT_STYLE_INTENSIFIERS
+
+        # version 2 lexicons (unused when feature_version == 1)
+        self.degree_adverbs = DEFAULT_DEGREE_ADVERBS
+        self.hyperbole_words = DEFAULT_HYPERBOLE_WORDS
+        self.hyperbole_phrases = DEFAULT_HYPERBOLE_PHRASES
+        self.acronyms = DEFAULT_SPANISH_ACRONYMS
+        self.alarm_lexicon = DEFAULT_ALARM_LEXICON
+        self.clickbait_phrases = DEFAULT_CLICKBAIT_PHRASES
+        self.speech_verb_lemmas = DEFAULT_SPEECH_VERB_LEMMAS
+        self.speech_verb_surface = DEFAULT_SPEECH_VERB_SURFACE
+        self.intrigue_verb_lemmas = DEFAULT_INTRIGUE_VERB_LEMMAS
+        self.intrigue_verb_surface = DEFAULT_INTRIGUE_VERB_SURFACE
+        self.narrative_connectors = DEFAULT_NARRATIVE_CONNECTORS
+        self.argument_connectors = DEFAULT_ARGUMENT_CONNECTORS
 
         # spaCy pipeline
         self._nlp = None
@@ -237,6 +392,7 @@ class StyleExtractor:
     def meta(self) -> Dict[str, Any]:
         return {
             "module": "StyleExtractor",
+            "feature_version": self.feature_version,
             "spacy_available": self._nlp is not None,
             "spacy_model": self.config.spacy_model,
             "textstat_available": textstat is not None,
@@ -310,6 +466,7 @@ class StyleExtractor:
                         "num_texts": len(texts),
                         "has_ids": ids is not None,
                         "batch_size": batch_size,
+                        "feature_version": self.feature_version,
                         "spacy_available": (self._nlp is not None),
                         "spacy_model": self.config.spacy_model,
                         "compute_readability": self.config.compute_readability,
@@ -466,7 +623,8 @@ class StyleExtractor:
                     rare += 1
             error_rate = float(rare) / float(max(len(words_lower), 1))
 
-        extra = self._extra_style_signals(text_raw, tokens, words_lower, num_sents) if self.config.extra_signals else {}
+        sent_texts = [getattr(s, "text", s) for s in sents]
+        extra = self._extra_style_signals(text_raw, tokens, words_lower, num_sents, sent_texts) if self.config.extra_signals else {}
 
         feats: Dict[str, float] = {
             "ifsz": float(ifsz),
@@ -532,7 +690,7 @@ class StyleExtractor:
                     rare += 1
             error_rate = float(rare) / float(max(len(words_lower), 1))
 
-        extra = self._extra_style_signals(text_raw, None, words_lower, num_sents) if self.config.extra_signals else {}
+        extra = self._extra_style_signals(text_raw, None, words_lower, num_sents, sents) if self.config.extra_signals else {}
 
         feats: Dict[str, float] = {
             "ifsz": float(ifsz),
@@ -561,7 +719,8 @@ class StyleExtractor:
     # Extra stylometric signals
     # -------------------------
 
-    def _extra_style_signals(self, text: str, tokens, words_lower: List[str], num_sents: int) -> Dict[str, float]:
+    def _extra_style_signals(self, text: str, tokens, words_lower: List[str], num_sents: int,
+                             sent_texts: Optional[List[str]] = None) -> Dict[str, float]:
         num_chars = max(len(text), 1)
         num_words = max(len(words_lower), 1)
 
@@ -605,7 +764,7 @@ class StyleExtractor:
         sent_lens = self._sentence_lengths_simple(text)
         burstiness = float(np.std(sent_lens)) if sent_lens else 0.0
 
-        return {
+        feats = {
             "sig_punct_ratio": punct_ratio,
             "sig_excl_per_sent": float(num_excl) / float(max(num_sents, 1)),
             "sig_q_per_sent": float(num_q) / float(max(num_sents, 1)),
@@ -623,6 +782,123 @@ class StyleExtractor:
             "sig_hedge_ratio": hedge_ratio,
             "sig_proper_like_ratio": proper_like_ratio,
             "sig_burstiness": burstiness,
+        }
+
+        if self.feature_version >= 2:
+            feats.update(self._extended_style_signals(
+                text, tokens, words_lower, num_words, num_sents, sent_texts))
+
+        return feats
+
+    def _extended_style_signals(
+        self, text: str, tokens, words_lower: List[str], num_words: int,
+        num_sents: int, sent_texts: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """
+        feature_version == 2 additions (lexical / surface; spaCy lemmas used
+        for the speech / intrigue verbs when a doc is available):
+
+        - sig_expr_punct_per_word     : (! ¡ ? ¿ ... …) per word            [ratio]
+        - sig_interrobang_per_sent    : "?!" / "!?" / ‼ / ⁉ per sentence    [count]
+        - sig_allcaps_word_ratio      : fully-uppercase words (>=2 letters,
+                                        not a known acronym) per word        [ratio]
+        - sig_degree_adv_ratio        : degree adverbs per word              [ratio]
+        - sig_superlative_ratio       : -ísimo/-érrimo superlatives per word [ratio]
+        - sig_hyperbole_ratio         : universal quantifiers (todos, nadie,
+                                        siempre, "miles de"...) per word      [ratio]
+        - sig_alarm_cue_per_sent      : urgency/alarm words + clickbait
+                                        phrases per sentence                 [count]
+        - sig_rhetorical_q_ratio      : interrogative sentences / sentences   [ratio]
+        - sig_speech_verb_per_sent    : reported-speech verbs per sentence   [count]
+        - sig_connector_per_sent      : all narrative + argumentative
+                                        connectors per sentence (density)    [count]
+        - sig_connector_narr_ratio    : narrative / (narrative + argumentative)
+                                        connectors -- the contrast (0.5 = none,
+                                        1 = all narrative, 0 = all argument.)  [ratio]
+        - sig_intrigue_verb_ratio     : perception/intrigue verbs per word   [ratio]
+        """
+        sents_d = float(max(num_sents, 1))
+        low = text.lower()
+
+        expr_marks = (
+            text.count("!") + text.count("¡") + text.count("?") + text.count("¿")
+            + len(_ELLIPSIS_RE.findall(text))
+        )
+        expr_punct_per_word = float(expr_marks) / num_words
+        interrobang_per_sent = float(len(_INTERROBANG_RE.findall(text))) / sents_d
+
+        words_raw = _WORD_RE.findall(text)
+        allcaps = sum(
+            1
+            for w in words_raw
+            if len(w) >= 2 and w.isupper() and w.upper() not in self.acronyms
+        )
+        allcaps_word_ratio = float(allcaps) / float(max(len(words_raw), 1))
+
+        degree_adv_ratio = (
+            float(sum(1 for w in words_lower if w in self.degree_adverbs)) / num_words
+        )
+        superlative_ratio = (
+            float(sum(1 for w in words_lower if len(w) >= 6 and _SUPERLATIVE_RE.search(w)))
+            / num_words
+        )
+        hyperbole_hits = sum(1 for w in words_lower if w in self.hyperbole_words)
+        hyperbole_hits += sum(low.count(p) for p in self.hyperbole_phrases)
+        hyperbole_ratio = float(hyperbole_hits) / num_words
+
+        alarm_words = sum(1 for w in words_lower if w in self.alarm_lexicon)
+        phrase_hits = sum(low.count(p) for p in self.clickbait_phrases)
+        alarm_cue_per_sent = float(alarm_words + phrase_hits) / sents_d
+
+        # --- rhetorical questions: interrogative sentences / total sentences ---
+        # Prefer spaCy sentence spans (they keep terminal punctuation); fall
+        # back to counting sentence-final "?" runs (the simple splitter strips
+        # the delimiters). Denominator is the spaCy sentence count when available.
+        if sent_texts and any(s.rstrip()[-1:] in ".!?…" for s in sent_texts if s.strip()):
+            q_sents = sum(1 for s in sent_texts if s.rstrip().endswith("?"))
+            rhetorical_q_ratio = float(q_sents) / float(max(len(sent_texts), 1))
+        else:
+            q_sents = len(re.findall(r"\?+(?=\s|$|[\"»)\]])", text))
+            rhetorical_q_ratio = min(float(q_sents) / sents_d, 1.0)
+
+        # --- reported-speech verbs (lemmas via spaCy, else surface forms) ---
+        if tokens is not None and any(getattr(t, "lemma_", "") for t in tokens):
+            speech_hits = sum(
+                1 for t in tokens if getattr(t, "lemma_", "").lower() in self.speech_verb_lemmas
+            )
+            intrigue_hits = sum(
+                1 for t in tokens if getattr(t, "lemma_", "").lower() in self.intrigue_verb_lemmas
+            )
+        else:
+            speech_hits = sum(1 for w in words_lower if w in self.speech_verb_surface)
+            intrigue_hits = sum(1 for w in words_lower if w in self.intrigue_verb_surface)
+        speech_verb_per_sent = float(speech_hits) / sents_d
+        intrigue_verb_ratio = float(intrigue_hits) / num_words
+
+        # --- narrative vs. argumentative connectors: density + contrast ---
+        # (bare presence of "entonces" / "sin embargo" barely discriminates in
+        # general Spanish -- what matters is overall density and the balance
+        # between the two groups.)
+        narr = sum(low.count(c) for c in self.narrative_connectors if " " in c)
+        narr += sum(1 for w in words_lower if w in _NARR_SINGLE)
+        arg = sum(low.count(c) for c in self.argument_connectors if " " in c)
+        arg += sum(1 for w in words_lower if w in _ARG_SINGLE)
+        connector_per_sent = float(narr + arg) / sents_d
+        connector_narr_ratio = float(narr) / float(narr + arg) if (narr + arg) else 0.5
+
+        return {
+            "sig_expr_punct_per_word": expr_punct_per_word,
+            "sig_interrobang_per_sent": interrobang_per_sent,
+            "sig_allcaps_word_ratio": allcaps_word_ratio,
+            "sig_degree_adv_ratio": degree_adv_ratio,
+            "sig_superlative_ratio": superlative_ratio,
+            "sig_hyperbole_ratio": hyperbole_ratio,
+            "sig_alarm_cue_per_sent": alarm_cue_per_sent,
+            "sig_rhetorical_q_ratio": rhetorical_q_ratio,
+            "sig_speech_verb_per_sent": speech_verb_per_sent,
+            "sig_connector_per_sent": connector_per_sent,
+            "sig_connector_narr_ratio": connector_narr_ratio,
+            "sig_intrigue_verb_ratio": intrigue_verb_ratio,
         }
 
     # -------------------------
@@ -663,6 +939,15 @@ class StyleExtractor:
             "sig_intensifier_ratio",
             "sig_hedge_ratio",
             "sig_proper_like_ratio",
+            # feature_version == 2
+            "sig_expr_punct_per_word",
+            "sig_allcaps_word_ratio",
+            "sig_degree_adv_ratio",
+            "sig_superlative_ratio",
+            "sig_hyperbole_ratio",
+            "sig_rhetorical_q_ratio",
+            "sig_connector_narr_ratio",
+            "sig_intrigue_verb_ratio",
         }
 
         positive_count_like = {
@@ -677,6 +962,11 @@ class StyleExtractor:
             "sig_avg_word_len",
             "sig_se_per_sent",
             "sig_burstiness",
+            # feature_version == 2
+            "sig_interrobang_per_sent",
+            "sig_alarm_cue_per_sent",
+            "sig_speech_verb_per_sent",
+            "sig_connector_per_sent",
         }
 
         for k, v in feats.items():
