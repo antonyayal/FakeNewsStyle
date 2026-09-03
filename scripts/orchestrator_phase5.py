@@ -4,7 +4,7 @@
 Phase 5: robustness to leakage by outlet (Source) -- source-disjoint folds
 (StratifiedGroupKFold + GroupShuffleSplit grouped by Source, see
 src/data/source_split_corpus.py), so no news outlet appears in more than one
-of a fold's train/val/test. Takes the SAME top 5 (config, variant) entries
+of a fold's train/val/test. Takes the SAME all-15 (config, variant) entries
 from results/phase3_top.json as orchestrator_phase4.py (independent branch,
 not chained after Phase 4) and repeats each across 5 folds x the 5 fixed
 SEEDS. See scripts/fold_validation.py for the shared mechanics.
@@ -56,7 +56,7 @@ def load_phase3_top() -> List[Dict[str, Any]]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 5: validate Phase 3's top 5 across source-disjoint folds")
+    parser = argparse.ArgumentParser(description="Phase 5: validate all 15 of Phase 3's combos across source-disjoint folds")
     parser.add_argument("--run", action="store_true", help="Run the full sweep (resumable)")
     parser.add_argument("--summary", action="store_true", help="Aggregate results/orchestrator_phase5.jsonl")
     parser.add_argument("--dry-run", action="store_true")

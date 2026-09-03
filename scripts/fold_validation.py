@@ -3,10 +3,12 @@
 """
 Shared engine behind orchestrator_phase4.py (kfold, normal CV) and
 orchestrator_phase5.py (source_disjoint CV) -- the two are ~90% identical
-(same protocol: take the top 5 configs from results/phase3_top.json, repeat
-each across N folds x the 5 fixed SEEDS, purely as a generalization/
-robustness check on already-chosen models, exploring nothing new), differing
-only in which of main.py's --corpus_mode partitions they read.
+(same protocol: take all 15 configs from results/phase3_top.json -- one per
+extractor combo, each already carrying its own best Phase 3 hyperparameters
+-- and repeat each across N folds x the 5 fixed SEEDS, purely as a
+generalization/robustness check on already-chosen models, exploring nothing
+new), differing only in which of main.py's --corpus_mode partitions they
+read.
 
 Per fold, per config, two kinds of calls:
   1. once: --preprocess_text --extract_{active branches} --run_vaes
@@ -17,20 +19,22 @@ Per fold, per config, two kinds of calls:
   2. once per seed: --train_kan --kan_seed s (reads the same merged latents
      via the same --corpus_mode/index, no explicit --kan_train_pkl needed)
 
-Since 5 different configs are validated across the same N folds (unlike the
-single-winner design this was generalized from), the merged-latents
-directory is namespaced per config, not just per fold:
+Since every extractor combo is validated across the same N folds, the
+merged-latents directory is namespaced per config, not just per fold:
     {merged_cv_dir}/seed{S}_n{N}/fold{k}/{entry_label}/
 
 Produces two outputs:
   - {phase}_per_fold.json: full per-config x per-fold stats (mean/std/min/max
     over the 5 seeds), for both the VAL split (selection metric, bare names)
-    and TEST split (test_-prefixed, reported only, never used to pick the
+    and TEST split (test_-prefixed, reported only, never used to pick a
     winner).
-  - {phase}_top.json: a single global winner -- the config with the best
-    mean VAL metric across all N folds x 5 seeds combined (not one winner
-    per fold) -- plus that same winner's TEST metric alongside, for an
-    honest read of its held-out performance.
+  - {phase}_top.json: ALL combos' results, ranked by mean VAL metric across
+    all N folds x 5 seeds combined (not one result per fold) -- plus each
+    combo's TEST metric alongside, for an honest read of its held-out
+    performance. Deliberately not collapsed to a single global winner: Phase
+    3 already gave every combo a fair shot at its own hyperparameters, so
+    that diversity is preserved through fold validation instead of being
+    reduced here.
 """
 
 from __future__ import annotations
@@ -300,11 +304,17 @@ def summarize(
         json.dump({"metric": RANKING_METRIC, "configs": per_label_summary}, f, indent=2, ensure_ascii=False, default=str)
     print(f"\nSaved: {per_fold_json}")
 
-    winner = max(global_rows, key=lambda r: r[f"{RANKING_METRIC}_mean"])
-    print(f"\n=== {phase_name} global winner: {winner['entry_label']} "
-          f"({RANKING_METRIC}_mean={winner[f'{RANKING_METRIC}_mean']:.4f}) ===")
+    # One result PER combo, not a single collapsed global winner -- Phase 3
+    # already gave every combo a fair shot at its own best hyperparameters,
+    # so the extractor-combo diversity should survive all the way through
+    # fold validation instead of being reduced to one "winner" here.
+    ranked = sorted(global_rows, key=lambda r: r[f"{RANKING_METRIC}_mean"], reverse=True)
+    print(f"\n=== {phase_name} -- all {len(ranked)} combos, ranked by val {RANKING_METRIC} ===")
+    for i, r in enumerate(ranked, start=1):
+        test_str = f"  (test {RANKING_METRIC}={r[f'test_{RANKING_METRIC}_mean']:.4f})" if f"test_{RANKING_METRIC}_mean" in r else ""
+        print(f"  {i}. {r['entry_label']}  {RANKING_METRIC}_mean={r[f'{RANKING_METRIC}_mean']:.4f}{test_str}")
 
     top_json.parent.mkdir(parents=True, exist_ok=True)
     with open(top_json, "w", encoding="utf-8") as f:
-        json.dump({"metric": RANKING_METRIC, "winner": winner}, f, indent=2, ensure_ascii=False, default=str)
+        json.dump({"metric": RANKING_METRIC, "results": ranked}, f, indent=2, ensure_ascii=False, default=str)
     print(f"Saved: {top_json}")

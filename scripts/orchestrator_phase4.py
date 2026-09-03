@@ -3,8 +3,9 @@
 """
 Phase 4: robustness to partition -- standard stratified k-fold (NOT
 source-disjoint, see orchestrator_phase5.py for that) over the pooled
-corpus. Takes the top 5 (config, variant) entries from results/phase3_top.json
-and repeats each across 5 folds x the 5 fixed SEEDS, purely as a
+corpus. Takes all 15 (config, variant) entries from results/phase3_top.json
+-- one per extractor combo, each with its own Phase-3-tuned hyperparameters
+-- and repeats each across 5 folds x the 5 fixed SEEDS, purely as a
 generalization check -- explores nothing new. See scripts/fold_validation.py
 for the shared mechanics (also used by orchestrator_phase5.py).
 
@@ -49,7 +50,7 @@ def load_phase3_top() -> List[Dict[str, Any]]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 4: validate Phase 3's top 5 across normal k-folds")
+    parser = argparse.ArgumentParser(description="Phase 4: validate all 15 of Phase 3's combos across normal k-folds")
     parser.add_argument("--run", action="store_true", help="Run the full sweep (resumable)")
     parser.add_argument("--summary", action="store_true", help="Aggregate results/orchestrator_phase4.jsonl")
     parser.add_argument("--dry-run", action="store_true")

@@ -101,28 +101,32 @@ manualmente (`experiment_runner.resolve_kan_input` /
 `merge_latents_manual`), apuntando `--train_kan` a esos PKLs vía
 `--kan_train_pkl`/`--kan_val_pkl`/`--kan_test_pkl`.
 
-Ranking: 15 configs x 18 variantes = 270 combinaciones → **aquí sí** se
-toma el top-5 global, totalmente resuelto (extractores + dims + los 5
-hiperparámetros) — ya es honesto filtrar aquí, porque las 15 combinaciones
-ya tuvieron su oportunidad de brillar bajo cualquiera de los 18
-hiperparámetros. Salida: `results/phase3_top.json`.
+Ranking: 15 configs x 18 variantes = 270 combinaciones → **la mejor
+variante de hiperparámetros POR combinación** (nunca un top-5 plano cruzado
+entre combinaciones — eso dejaría que una sola combinación dominante se
+quedara con los 5 lugares, como pasaba antes: con `context` filtrando el
+top-5 desde Fase 2, cada ganador de Fase 3 terminaba siendo una variante de
+"`context` solo"). Las **15 combinaciones, cada una totalmente resuelta**
+(extractores + dims + sus propios 5 hiperparámetros óptimos) avanzan a
+Fase 4/5. Salida: `results/phase3_top.json`.
 
 ## Fase 4 y Fase 5 — validación por folds
 
 ```bash
-python scripts/orchestrator_phase4.py --run --dry-run   # k-fold normal (125 corridas)
+python scripts/orchestrator_phase4.py --run --dry-run   # k-fold normal (375 corridas)
 python scripts/orchestrator_phase4.py --run
 
-python scripts/orchestrator_phase5.py --run --dry-run   # folds source-disjoint (125 corridas)
+python scripts/orchestrator_phase5.py --run --dry-run   # folds source-disjoint (375 corridas)
 python scripts/orchestrator_phase5.py --run
 ```
 
 Ambas requieren `results/phase3_top.json` y son **ramas independientes**
-(ninguna depende de la otra, las dos parten del mismo top 5 de la Fase 3).
-No exploran nada nuevo: repiten cada uno de los 5 configs ganadores across
-5 folds x 5 seeds = 125 corridas cada una, vía `--corpus_mode kfold`
-(Fase 4) o `--corpus_mode source_disjoint` (Fase 5) — ver el docstring de
-`main.py` y `src/data/kfold_corpus.py` / `src/data/source_split_corpus.py`.
+(ninguna depende de la otra, las dos parten de las mismas 15 combinaciones
+de la Fase 3). No exploran nada nuevo: repiten cada una de las 15
+combinaciones across 5 folds x 5 seeds = 375 corridas cada una, vía
+`--corpus_mode kfold` (Fase 4) o `--corpus_mode source_disjoint` (Fase 5) —
+ver el docstring de `main.py` y `src/data/kfold_corpus.py` /
+`src/data/source_split_corpus.py`.
 
 La Fase 5 es el test definitivo del leakage por `Source` documentado en el
 README principal: si el F1 colapsa hacia el techo de la ablación
@@ -132,8 +136,10 @@ estilo/semántica.
 
 Cada fase produce dos archivos: `phase{4,5}_per_fold.json` (detalle
 completo por config x fold, media/std/min/max sobre las 5 seeds) y
-`phase{4,5}_top.json` (un solo ganador global: el config con mejor F1
-promedio combinando los 5 folds x 5 seeds, no un ganador por fold).
+`phase{4,5}_top.json` (**las 15 combinaciones ranqueadas**, no un solo
+ganador global colapsado — Fase 3 ya le dio a cada combinación su propia
+oportunidad con sus mejores hiperparámetros, así que esa diversidad se
+conserva hasta el final en vez de reducirse aquí).
 
 ## Fase 6 — context sin identidad (control de leakage de Source/Domain)
 
@@ -155,28 +161,36 @@ default):
 python scripts/orchestrator_phase6.py --run --dry-run --stage ab   # Stage A+B (95 corridas)
 python scripts/orchestrator_phase6.py --run --stage ab
 
-python scripts/orchestrator_phase6.py --run --dry-run --stage c    # Stage C (450 corridas)
+python scripts/orchestrator_phase6.py --run --dry-run --stage c    # Stage C (1350 corridas)
 python scripts/orchestrator_phase6.py --run --stage c
 
-python scripts/orchestrator_phase6.py --run --dry-run --stage d    # Stage D (125 corridas)
+python scripts/orchestrator_phase6.py --run --dry-run --stage d    # Stage D (375 corridas)
 python scripts/orchestrator_phase6.py --run --stage d
 
-python scripts/orchestrator_phase6.py --run --dry-run --stage e    # Stage E (125 corridas)
+python scripts/orchestrator_phase6.py --run --dry-run --stage e    # Stage E (375 corridas)
 python scripts/orchestrator_phase6.py --run --stage e
 ```
+
+Mismo principio que Fases 2-5: ningún stage filtra por combinación antes de
+que le toque su turno de tuning/validación — la diversidad de extractores
+se conserva de punta a punta.
 
 - **Stage A** (Fase 1 equivalente): `context` solo, dim sobre
   `PHASE6_CONTEXT_DIM_CANDIDATES` (4/8/16/23, capado al dim identity-free
   real) x 5 seeds -> `results/phase6_context_top.json`.
 - **Stage B** (Fase 2 equivalente): los 15 combos, `context` en la dim
   ganadora de Stage A y las otras 3 modalidades en sus dims rank-1 de la
-  Fase 1 x 5 seeds -> ranking final en `results/phase6_top.json`.
+  Fase 1 x 5 seeds -> **las 15 combinaciones completas** avanzan (sin
+  poolear ni filtrar, igual que la Fase 2) -> `results/phase6_top.json`.
 - **Stage C** (Fase 3 equivalente): las 18 variantes de `PHASE3_CANDIDATES`
-  sobre el top-5 de Stage B (pooled con el top-2 de Stage A y el top-2
-  original de la Fase 1 para semantic/emotion/style, igual que la Fase 2
-  poolea la Fase 1) -> `results/phase6_stageC_top.json`.
+  sobre las 15 combinaciones de Stage B = 270 candidatos -> **la mejor
+  variante por combinación** (no un top-5 plano) -> las 15 combinaciones,
+  cada una con sus mejores hiperparámetros, en
+  `results/phase6_stageC_top.json`.
 - **Stage D/E** (Fase 4/5 equivalentes): validación k-fold / source-disjoint
-  del top-5 de Stage C.
+  de las 15 combinaciones de Stage C -> `results/phase6_stageD_top.json` /
+  `results/phase6_stageE_top.json` con las 15 ranqueadas, sin colapsar a un
+  solo ganador.
 
 **Aislamiento de `context` por rama que sí importa (Stage C):** aunque una
 variante use `vae_beta`/`vae_dropout` default (que para las otras 3
@@ -218,14 +232,15 @@ línea) se reintentan automáticamente — no hay flag especial de resume.
   el cache compartido de `data/05_vae_latents/` / `models/vae/`.
 - `data/06_vae_latents_merged_cv/` (Fase 4) y
   `data/06_vae_latents_merged_source_cv/` (Fase 5) — latentes mergeados por
-  fold, namespaced por `{entry_label}` ya que 5 configs distintos se validan
-  sobre los mismos folds.
+  fold, namespaced por `{entry_label}` ya que las 15 combinaciones se
+  validan sobre los mismos folds.
 
 ## Costo esperado
 
 Fase 1: 85 corridas. Fase 2: 75. Fase 3: 1350 (15 configs x 18 variantes x
 5 seeds -- ya no se filtra a un top-5 antes de tunear hiperparámetros).
-Fase 4: 125. Fase 5: 125. Total: 1760 corridas KAN-only (más el entrenamiento puntual de las VAEs que
+Fase 4: 375. Fase 5: 375 (15 combinaciones x 5 folds x 5 seeds cada una --
+ya no se filtra a un top-5 antes de fold-validation). Total: 2260 corridas KAN-only (más el entrenamiento puntual de las VAEs que
 falten en cada cache). Orden de segundos-minutos por corrida KAN-only en
 GPU/CPU del servidor; el arranque de cada subproceso `python main.py ...`
 importa torch/tensorflow/transformers/spaCy sin importar qué flag se use

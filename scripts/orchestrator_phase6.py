@@ -52,8 +52,6 @@ from experiment_config import (  # noqa: E402
     BASE_DIR,
     DEFAULT_LATENT_DIM,
     FIXED_KAN_BASELINE,
-    PHASE1_RESULTS_JSONL,
-    PHASE1_TOP_JSON,
     PHASE3_BASELINE,
     PHASE4_N_FOLDS,
     PHASE4_SPLIT_SEED,
@@ -333,38 +331,17 @@ def summarize() -> None:
 # orchestrator_phase2.py's _phase1_pool_rows()).
 # =============================================================================
 
-def load_stageB_pool() -> pd.DataFrame:
+def load_stageC_configs() -> list:
+    """All 15 combos from Stage B, not a pre-filtered top-K -- mirrors
+    orchestrator_phase2.py's fix: Stage A already picked context's best dim,
+    so no second filtering happens here on top of it. Filtering by combo
+    before Stage C's hyperparameter sweep would let a combo that's mediocre
+    under default hyperparameters get discarded before it had a fair shot."""
     dfB = load_runs(PHASE6_RESULTS_JSONL)
     dfB = dfB[dfB.get("stage") == "B"] if not dfB.empty else dfB
-
-    dfA = load_runs(PHASE6_RESULTS_JSONL)
-    dfA = dfA[dfA.get("stage") == "A"] if not dfA.empty else dfA
-    if not dfA.empty and PHASE6_CONTEXT_TOP_JSON.exists():
-        with open(PHASE6_CONTEXT_TOP_JSON, encoding="utf-8") as f:
-            top_dims = {e["dim"] for e in json.load(f)["entries"]}
-        dfA = dfA[dfA["dim"].isin(top_dims)]
-
-    df1 = load_runs(PHASE1_RESULTS_JSONL)
-    if not df1.empty:
-        df1 = df1[df1["branch"] != "context"]
-        if PHASE1_TOP_JSON.exists():
-            with open(PHASE1_TOP_JSON, encoding="utf-8") as f:
-                top1 = json.load(f)
-            winning_pairs = {
-                (b, e["dim"]) for b, es in top1["by_branch"].items() for e in es if b != "context"
-            }
-            df1 = df1[df1.apply(lambda r: (r.get("branch"), r.get("dim")) in winning_pairs, axis=1)]
-
-    parts = [d for d in [dfB, dfA, df1] if not d.empty]
-    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
-
-def load_stageC_configs() -> list:
-    pool = load_stageB_pool()
-    if pool.empty:
-        raise RuntimeError("No Stage B (or pool) runs logged -- run Stage A+B first.")
-    ranking = aggregate_by_config(pool, group_by="extractors", metric=RANKING_METRIC)
-    top5 = ranking.head(5)
+    if dfB.empty:
+        raise RuntimeError("No Stage B runs logged -- run Stage A+B first.")
+    ranking = aggregate_by_config(dfB, group_by="extractors", metric=RANKING_METRIC)
 
     other_dims = load_phase1_dims()
     if not PHASE6_CONTEXT_TOP_JSON.exists():
@@ -373,7 +350,7 @@ def load_stageC_configs() -> list:
         best_ctx_dim = json.load(f)["entries"][0]["dim"]
 
     configs = []
-    for _, row in top5.iterrows():
+    for _, row in ranking.iterrows():
         combo = [m for m in ALL_MODALITIES if m in row["config"].split("+")]
         latent_dims = {b: (best_ctx_dim if b == "context" else other_dims[b]) for b in combo}
         configs.append({"active_extractors": combo, "latent_dims": latent_dims})
@@ -513,14 +490,18 @@ def summarize_stage_c() -> list:
         return []
 
     ranking = aggregate_by_config(dfc, group_by="candidate", metric=RANKING_METRIC)
-    top5 = ranking.head(5)
+    # Best variant PER combo, not a flat top-5 across combos -- see
+    # orchestrator_phase3.py's summarize() for the same fix and rationale.
+    ranking["_label"] = ranking["config"].str.split("::", n=1).str[0]
+    best_per_combo = ranking.drop_duplicates(subset="_label", keep="first")
     other_dims = load_phase1_dims()
     with open(PHASE6_CONTEXT_TOP_JSON, encoding="utf-8") as f:
         best_ctx_dim = json.load(f)["entries"][0]["dim"]
 
-    print(f"\n=== Phase 6 / Stage C top 5 (by val {RANKING_METRIC}) ===")
+    print(f"\n=== Phase 6 / Stage C -- best hyperparameter variant per combo "
+          f"({len(best_per_combo)} combos advancing, by val {RANKING_METRIC}) ===")
     entries = []
-    for i, row in top5.iterrows():
+    for i, (_, row) in enumerate(best_per_combo.iterrows()):
         label, variant_label = row["config"].split("::", 1)
         combo = [m for m in ALL_MODALITIES if m in label.split("_")]
         effective = {**PHASE3_BASELINE, **PHASE3_CANDIDATES[variant_label]}
@@ -814,13 +795,17 @@ def summarize_fold_stage(*, results_jsonl: Path, per_fold_json: Path, top_json: 
         json.dump({"metric": RANKING_METRIC, "configs": per_label_summary}, f, indent=2, ensure_ascii=False, default=str)
     print(f"\nSaved: {per_fold_json}")
 
-    winner = max(global_rows, key=lambda r: r[f"{RANKING_METRIC}_mean"])
-    print(f"\n=== {phase_name} global winner: {winner['entry_label']} "
-          f"({RANKING_METRIC}_mean={winner[f'{RANKING_METRIC}_mean']:.4f}) ===")
+    # One result PER combo, not a single collapsed winner -- see
+    # fold_validation.py's summarize() for the same fix and rationale.
+    ranked = sorted(global_rows, key=lambda r: r[f"{RANKING_METRIC}_mean"], reverse=True)
+    print(f"\n=== {phase_name} -- all {len(ranked)} combos, ranked by val {RANKING_METRIC} ===")
+    for i, r in enumerate(ranked, start=1):
+        test_str = f"  (test {RANKING_METRIC}={r[f'test_{RANKING_METRIC}_mean']:.4f})" if f"test_{RANKING_METRIC}_mean" in r else ""
+        print(f"  {i}. {r['entry_label']}  {RANKING_METRIC}_mean={r[f'{RANKING_METRIC}_mean']:.4f}{test_str}")
 
     top_json.parent.mkdir(parents=True, exist_ok=True)
     with open(top_json, "w", encoding="utf-8") as f:
-        json.dump({"metric": RANKING_METRIC, "winner": winner}, f, indent=2, ensure_ascii=False, default=str)
+        json.dump({"metric": RANKING_METRIC, "results": ranked}, f, indent=2, ensure_ascii=False, default=str)
     print(f"Saved: {top_json}")
 
 

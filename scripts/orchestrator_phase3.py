@@ -13,8 +13,10 @@ experiment_config.PHASE3_CANDIDATES. kan_lr / kan_batch_size are not swept
 Applied to all 15 configs in results/phase2_top.json (Phase 2 forwards every
 extractor combo, not a pre-filtered subset -- see orchestrator_phase2.py):
 15 configs x 18 variants x 5 seeds = 1350 runs. Ranking pool = all 15 x 18 =
-270 (config, variant) combinations -> top 5 kept, fully resolved
-(extractors + latent dims + all 5 hyperparameters), ready for Phase 4/5.
+270 (config, variant) combinations -> the BEST variant PER combo is kept
+(never a flat top-N across combos, which would let one dominant combo
+occupy every slot) -> all 15 combos, each fully resolved (extractors +
+latent dims + its own best hyperparameters), advance to Phase 4/5.
 
 Variants matching the baseline (vae_beta=1.0, vae_dropout=0.1) reuse the
 shared default VAE cache via --merge_vae_latents (experiment_runner.
@@ -198,14 +200,22 @@ def summarize(configs: List[Dict[str, Any]]) -> None:
         return
 
     ranking = aggregate_by_config(df, group_by="candidate", metric=RANKING_METRIC)
-    top5 = ranking.head(5)
+    # aggregate_by_config already sorts descending by {RANKING_METRIC}_mean, so
+    # keeping the first row per extractor-combo label is that combo's best
+    # hyperparameter variant. One winner PER combo -- never a flat top-5 across
+    # all (combo, variant) pairs, which could (and did) let a single dominant
+    # combo occupy every slot and starve every other combo of ever finishing
+    # hyperparameter tuning.
+    ranking["_label"] = ranking["config"].str.split("::", n=1).str[0]
+    best_per_combo = ranking.drop_duplicates(subset="_label", keep="first")
 
     latent_by_label = {config_label(cfg["active_extractors"]): cfg["latent_dims"] for cfg in configs}
 
-    print(f"\n=== Phase 3 top 5 ({len(configs)} configs x {len(PHASE3_CANDIDATES)} variants = "
-          f"{len(configs) * len(PHASE3_CANDIDATES)} combos, by {RANKING_METRIC}) ===")
+    print(f"\n=== Phase 3 -- best hyperparameter variant per combo ({len(configs)} configs x "
+          f"{len(PHASE3_CANDIDATES)} variants = {len(configs) * len(PHASE3_CANDIDATES)} combos tried, "
+          f"{len(best_per_combo)} combos advancing, by {RANKING_METRIC}) ===")
     entries = []
-    for i, row in top5.iterrows():
+    for i, (_, row) in enumerate(best_per_combo.iterrows()):
         label, variant_label = row["config"].split("::", 1)
         combo = [m for m in ALL_MODALITIES if m in label.split("_")]
         effective = {**PHASE3_BASELINE, **PHASE3_CANDIDATES[variant_label]}
