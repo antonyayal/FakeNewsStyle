@@ -1,2 +1,0 @@
-threshold,accuracy,balanced_accuracy,precision,recall,specificity,f1,roc_auc,pr_auc,log_loss,brier_score,ece,entropy_mean,entropy_std,tn,fp,fn,tp,false_positive_rate,false_negative_rate
-0.5,0.5,0.5,0.0,0.0,1.0,0.0,0.5398552496454594,0.5804831929400305,0.6931475019467195,0.2500001619426897,0.01310334500524546,0.6927972897554332,9.000937055369234e-05,286,0,286,0,0.0,1.0

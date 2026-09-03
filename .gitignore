@@ -1,8 +1,10 @@
 venv/
 *.pkl
 *.npy
-*.hi5
+*.h5
 *.pt
+*.keras
+*.joblib
 __pycache__/
 *.log
 .DS_Store
@@ -11,3 +13,5 @@ outputs/
 results/
 results_old/
 results_old_2/
+data/07_kan_runs/
+models/vae/
