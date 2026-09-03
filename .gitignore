@@ -13,5 +13,15 @@ outputs/
 results/
 results_old/
 results_old_2/
-data/07_kan_runs/
-models/vae/
+
+# Pipeline-derived intermediates (regenerable via main.py --step) -- covers
+# the base stage dirs and every variant suffix (_cv, _source_cv, _phase6,
+# _old, _homologated, _fullsweep, etc.), not just the plain ones.
+data/01_corpus_pkl*/
+data/02_corpus_clean*/
+data/03_features_raw*/
+data/04_features_merged*/
+data/05_vae_latents*/
+data/06_vae_latents_merged*/
+data/07_kan_runs*/
+models/vae*/
