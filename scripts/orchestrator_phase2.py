@@ -11,10 +11,17 @@ The VAE for each active branch (at its Phase-1-winning dim) trains ONCE via
 experiment_runner.ensure_vae_latents and is reused across the 15 combos that
 include it and their 5 seeds each.
 
-Ranking pool for the final top 5: the 15 combo results here, PLUS the 8
-single-branch results already run in Phase 1 (top-2 x 4 branches) -- those
-aren't re-run, their raw per-seed rows are pulled straight from
-PHASE1_RESULTS_JSONL and pooled into the same ranking.
+Phase 2 does NOT filter down to a top-K before handing off to Phase 3 --
+all 15 combos (each fully resolved: extractors + Phase 1's winning dims)
+are written to results/phase2_top.json and all 15 get hyperparameter-tuned
+in Phase 3. Filtering on raw/default-hyperparameter performance before
+hyperparameter tuning would let a combo that's mediocre under the default
+KAN/VAE settings get discarded before it ever had a chance to shine under a
+different setting (see e.g. 2026-09-03: with the leaky context branch, the
+5-combo cutoff meant only context-containing combos ever reached Phase 3's
+hyperparameter sweep). The only "top" selection left is Phase 1's dimension
+choice per branch and, downstream, Phase 3's own top-5 after hyperparameters
+have had a fair shot at every combo.
 
 Usage:
     python scripts/orchestrator_phase2.py --run
@@ -41,7 +48,6 @@ from experiment_config import (  # noqa: E402
     ALL_MODALITIES,
     BASE_DIR,
     KAN_RUNS_DIR,
-    PHASE1_RESULTS_JSONL,
     PHASE1_TOP_JSON,
     PHASE2_RESULTS_JSONL,
     PHASE2_TOP_JSON,
@@ -161,56 +167,30 @@ def run_sweep(dims: Dict[str, int], dry_run: bool) -> None:
     print(f"Total accumulated in {PHASE2_RESULTS_JSONL}: {len(load_ok_run_keys(PHASE2_RESULTS_JSONL))}/{total} ok.")
 
 
-def _phase1_pool_rows() -> pd.DataFrame:
-    """Raw per-seed rows for Phase 1's top-2-per-branch (8 (branch, dim)
-    pairs) -- pulled from PHASE1_RESULTS_JSONL, not re-run, so they can be
-    pooled into the same ranking as Phase 2's own combo runs."""
-    if not PHASE1_TOP_JSON.exists():
-        return pd.DataFrame()
-    with open(PHASE1_TOP_JSON, "r", encoding="utf-8") as f:
-        top = json.load(f)
-
-    winning_pairs = {
-        (branch, entry["dim"]) for branch, entries in top["by_branch"].items() for entry in entries
-    }
-
-    df = load_runs(PHASE1_RESULTS_JSONL)
-    if df.empty:
-        return df
-    mask = df.apply(lambda row: (row.get("branch"), row.get("dim")) in winning_pairs, axis=1)
-    return df[mask]
-
-
 def summarize() -> None:
     phase2_df = load_runs(PHASE2_RESULTS_JSONL)
-    phase1_pool = _phase1_pool_rows()
-    combined = pd.concat([phase2_df, phase1_pool], ignore_index=True) if not phase1_pool.empty else phase2_df
 
-    if combined.empty:
+    if phase2_df.empty:
         print("No successful runs logged yet -- nothing to rank.")
         return
 
-    ranking = aggregate_by_config(combined, group_by="extractors", metric=RANKING_METRIC)
-    top5 = ranking.head(5)
+    dims = load_phase1_dims()
+    ranking = aggregate_by_config(phase2_df, group_by="extractors", metric=RANKING_METRIC)
 
-    print(f"\n=== Phase 2 top 5 (15 combos + 8 Phase 1 solo winners, by {RANKING_METRIC}) ===")
+    print(f"\n=== Phase 2 -- all {len(ranking)} combos, ranked by val {RANKING_METRIC} "
+          f"(all pass through to Phase 3, none filtered out here) ===")
     entries = []
-    for i, row in top5.iterrows():
+    for i, row in ranking.iterrows():
         combo = [m for m in ALL_MODALITIES if m in row["config"].split("+")]
-        subset = combined[combined["active_extractors"].apply(lambda c: "+".join(c)) == row["config"]]
-        if len(combo) == 1 and "dim" in subset.columns and subset["dim"].notna().any():
-            dims = {combo[0]: int(subset["dim"].dropna().iloc[0])}
-        else:
-            dims = load_phase1_dims()
-            dims = {b: dims[b] for b in combo}
+        combo_dims = {b: dims[b] for b in combo}
 
         test_col = f"test_{RANKING_METRIC}_mean"
         test_str = f"  (test {RANKING_METRIC}={row[test_col]:.4f})" if test_col in row and pd.notna(row[test_col]) else ""
-        print(f"  {i + 1}. {row['config']}  dims={dims}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
+        print(f"  {i + 1}. {row['config']}  dims={combo_dims}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
               f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])}){test_str}")
         entries.append({
             "active_extractors": combo,
-            "latent_dims": dims,
+            "latent_dims": combo_dims,
             f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
             f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
             "n_runs": int(row[f"{RANKING_METRIC}_count"]),
@@ -220,7 +200,7 @@ def summarize() -> None:
     PHASE2_TOP_JSON.parent.mkdir(parents=True, exist_ok=True)
     with open(PHASE2_TOP_JSON, "w", encoding="utf-8") as f:
         json.dump({"metric": RANKING_METRIC, "top": entries}, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved: {PHASE2_TOP_JSON}")
+    print(f"\nSaved: {PHASE2_TOP_JSON} ({len(entries)} combos, all forwarded to Phase 3)")
 
 
 def main():

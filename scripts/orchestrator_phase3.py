@@ -10,10 +10,11 @@ that overrides several of those knobs together; see
 experiment_config.PHASE3_CANDIDATES. kan_lr / kan_batch_size are not swept
 -- a prior sweep already found the default wins for both.
 
-Applied to each of the 5 configs in results/phase2_top.json: 5 configs x 18
-variants x 5 seeds = 450 runs. Ranking pool = all 5 x 18 = 90 (config,
-variant) combinations -> top 5 kept, fully resolved (extractors + latent
-dims + all 5 hyperparameters), ready for Phase 4/5.
+Applied to all 15 configs in results/phase2_top.json (Phase 2 forwards every
+extractor combo, not a pre-filtered subset -- see orchestrator_phase2.py):
+15 configs x 18 variants x 5 seeds = 1350 runs. Ranking pool = all 15 x 18 =
+270 (config, variant) combinations -> top 5 kept, fully resolved
+(extractors + latent dims + all 5 hyperparameters), ready for Phase 4/5.
 
 Variants matching the baseline (vae_beta=1.0, vae_dropout=0.1) reuse the
 shared default VAE cache via --merge_vae_latents (experiment_runner.
@@ -201,7 +202,8 @@ def summarize(configs: List[Dict[str, Any]]) -> None:
 
     latent_by_label = {config_label(cfg["active_extractors"]): cfg["latent_dims"] for cfg in configs}
 
-    print(f"\n=== Phase 3 top 5 (5 configs x {len(PHASE3_CANDIDATES)} variants = {5 * len(PHASE3_CANDIDATES)} combos, by {RANKING_METRIC}) ===")
+    print(f"\n=== Phase 3 top 5 ({len(configs)} configs x {len(PHASE3_CANDIDATES)} variants = "
+          f"{len(configs) * len(PHASE3_CANDIDATES)} combos, by {RANKING_METRIC}) ===")
     entries = []
     for i, row in top5.iterrows():
         label, variant_label = row["config"].split("::", 1)

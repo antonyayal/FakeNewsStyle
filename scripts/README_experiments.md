@@ -62,26 +62,35 @@ emotion, style, context}, cada branch activo usando su dimensión rank-1 de
 la Fase 1 (no se cruzan las 2 dimensiones candidatas) x 5 seeds = 75
 corridas.
 
-El ranking final no compite solo entre estos 15 combos: se suman las 8
-entradas de la Fase 1 (top-2 x 4 branches, ya evaluadas, no se re-corren) al
-mismo pool, y se toma el top 5 global. Salida: `results/phase2_top.json`.
+**Las 15 combinaciones completas pasan a Fase 3 — no se filtra a un top-K
+aquí.** El filtro de "mejor" ya se aplicó sobre el tamaño latente (Fase 1);
+filtrar de nuevo sobre qué combinación avanza, *antes* de probar
+hiperparámetros, descartaría injustamente una combinación que rinde mal con
+los hiperparámetros por defecto pero que podría mejorar mucho con otro
+`num_basis`/`hidden_dim`/etc. — exactamente lo que pasaba antes del
+2026-09-03: con `context` filtrando el top-5 por su ventaja de leakage,
+ninguna combinación sin `context` llegaba nunca a la Fase 3 a que se le
+ajustaran hiperparámetros. Salida: `results/phase2_top.json` con las 15
+combinaciones ranqueadas (ya no hace falta poolear con los 8 solos de Fase
+1 — cada combo, incluidos los de una sola modalidad, ya está entre los 15).
 
 ## Fase 3 — VAE-reg + hiperparámetros KAN, fusionados
 
 ```bash
-python scripts/orchestrator_phase3.py --run --dry-run   # revisar el plan (450 corridas)
+python scripts/orchestrator_phase3.py --run --dry-run   # revisar el plan (1350 corridas)
 python scripts/orchestrator_phase3.py --run
 ```
 
-Requiere `results/phase2_top.json`. Para cada uno de los 5 configs
-ganadores, corre las 18 variantes de `PHASE3_CANDIDATES` (un baseline —
-los defaults de `main.py` — más una perilla movida a la vez: 4 `vae_beta`,
-3 `vae_dropout`, 3 `kan_num_basis`, 4 `kan_hidden_dim` (8/16/32/128, más
-64 como baseline — cubre todo el rango 8–128), 2 `kan_weight_decay`; más
-una variante combinada, `combo_basis8_hidden16_wdhigh`, que mueve
-`kan_num_basis`, `kan_hidden_dim` y `kan_weight_decay` a la vez) x 5 seeds
-= 450 corridas. `kan_lr`/`kan_batch_size` no se sweepean — un sweep
-anterior ya encontró que ganan en su default.
+Requiere `results/phase2_top.json`. Para cada una de las **15 combinaciones**
+de Fase 2 (todas, no un subconjunto), corre las 18 variantes de
+`PHASE3_CANDIDATES` (un baseline — los defaults de `main.py` — más una
+perilla movida a la vez: 4 `vae_beta`, 3 `vae_dropout`, 3 `kan_num_basis`,
+4 `kan_hidden_dim` (8/16/32/128, más 64 como baseline — cubre todo el rango
+8–128), 2 `kan_weight_decay`; más una variante combinada,
+`combo_basis8_hidden16_wdhigh`, que mueve `kan_num_basis`, `kan_hidden_dim`
+y `kan_weight_decay` a la vez) x 5 seeds = **1350 corridas**.
+`kan_lr`/`kan_batch_size` no se sweepean — un sweep anterior ya encontró
+que ganan en su default.
 
 **VAE compartida vs. aislada**: `--merge_vae_latents` de `main.py` siempre
 lee de la ruta fija `data/05_vae_latents/{branch}/latent{dim}/`. Las
@@ -92,9 +101,11 @@ manualmente (`experiment_runner.resolve_kan_input` /
 `merge_latents_manual`), apuntando `--train_kan` a esos PKLs vía
 `--kan_train_pkl`/`--kan_val_pkl`/`--kan_test_pkl`.
 
-Ranking: 5 configs x 18 variantes = 90 combinaciones → top 5 global,
-totalmente resuelto (extractores + dims + los 5 hiperparámetros). Salida:
-`results/phase3_top.json`.
+Ranking: 15 configs x 18 variantes = 270 combinaciones → **aquí sí** se
+toma el top-5 global, totalmente resuelto (extractores + dims + los 5
+hiperparámetros) — ya es honesto filtrar aquí, porque las 15 combinaciones
+ya tuvieron su oportunidad de brillar bajo cualquiera de los 18
+hiperparámetros. Salida: `results/phase3_top.json`.
 
 ## Fase 4 y Fase 5 — validación por folds
 
@@ -212,8 +223,9 @@ línea) se reintentan automáticamente — no hay flag especial de resume.
 
 ## Costo esperado
 
-Fase 1: 85 corridas. Fase 2: 75. Fase 3: 450. Fase 4: 125. Fase 5: 125.
-Total: 860 corridas KAN-only (más el entrenamiento puntual de las VAEs que
+Fase 1: 85 corridas. Fase 2: 75. Fase 3: 1350 (15 configs x 18 variantes x
+5 seeds -- ya no se filtra a un top-5 antes de tunear hiperparámetros).
+Fase 4: 125. Fase 5: 125. Total: 1760 corridas KAN-only (más el entrenamiento puntual de las VAEs que
 falten en cada cache). Orden de segundos-minutos por corrida KAN-only en
 GPU/CPU del servidor; el arranque de cada subproceso `python main.py ...`
 importa torch/tensorflow/transformers/spaCy sin importar qué flag se use
