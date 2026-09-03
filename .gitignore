@@ -13,6 +13,7 @@ outputs/
 results/
 results_old/
 results_old_2/
+logs/
 
 # Pipeline-derived intermediates (regenerable via main.py --step) -- covers
 # the base stage dirs and every variant suffix (_cv, _source_cv, _phase6,

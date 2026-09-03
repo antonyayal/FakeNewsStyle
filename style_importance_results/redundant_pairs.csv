@@ -1,0 +1,6 @@
+feature_a,feature_b,spearman_corr
+ttr,redundancy,-1.0
+ttr,herdans_c,0.919
+redundancy,herdans_c,-0.919
+sig_avg_word_len,sig_long_word_ratio,0.889
+formality_f,pos_verb_ratio,-0.887
