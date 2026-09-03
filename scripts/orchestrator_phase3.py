@@ -1,15 +1,17 @@
 # scripts/orchestrator_phase3.py
 # -*- coding: utf-8 -*-
 """
-Phase 3: VAE regularization + KAN hyperparameters, fused into a single
-one-knob-at-a-time sweep (16 variants: a shared baseline -- main.py's own
-defaults -- plus one candidate per non-default value of vae_beta,
-vae_dropout, kan_num_basis, kan_hidden_dim, kan_weight_decay; see
-experiment_config.PHASE3_CANDIDATES). kan_lr / kan_batch_size are not swept
+Phase 3: VAE regularization + KAN hyperparameters, fused into a sweep of 18
+variants: a shared baseline -- main.py's own defaults -- plus one candidate
+per non-default value of vae_beta, vae_dropout, kan_num_basis,
+kan_hidden_dim (covering the full {8, 16, 32, 64, 128} range, 64 being the
+baseline), kan_weight_decay (one-knob-at-a-time), plus one combined variant
+that overrides several of those knobs together; see
+experiment_config.PHASE3_CANDIDATES. kan_lr / kan_batch_size are not swept
 -- a prior sweep already found the default wins for both.
 
-Applied to each of the 5 configs in results/phase2_top.json: 5 configs x 16
-variants x 5 seeds = 400 runs. Ranking pool = all 5 x 16 = 80 (config,
+Applied to each of the 5 configs in results/phase2_top.json: 5 configs x 18
+variants x 5 seeds = 450 runs. Ranking pool = all 5 x 18 = 90 (config,
 variant) combinations -> top 5 kept, fully resolved (extractors + latent
 dims + all 5 hyperparameters), ready for Phase 4/5.
 
@@ -197,7 +199,7 @@ def summarize(configs: List[Dict[str, Any]]) -> None:
 
     latent_by_label = {config_label(cfg["active_extractors"]): cfg["latent_dims"] for cfg in configs}
 
-    print(f"\n=== Phase 3 top 5 (5 configs x 16 variants = 80 combos, by {RANKING_METRIC}) ===")
+    print(f"\n=== Phase 3 top 5 (5 configs x {len(PHASE3_CANDIDATES)} variants = {5 * len(PHASE3_CANDIDATES)} combos, by {RANKING_METRIC}) ===")
     entries = []
     for i, row in top5.iterrows():
         label, variant_label = row["config"].split("::", 1)

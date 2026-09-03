@@ -69,16 +69,19 @@ mismo pool, y se toma el top 5 global. Salida: `results/phase2_top.json`.
 ## Fase 3 — VAE-reg + hiperparámetros KAN, fusionados
 
 ```bash
-python scripts/orchestrator_phase3.py --run --dry-run   # revisar el plan (400 corridas)
+python scripts/orchestrator_phase3.py --run --dry-run   # revisar el plan (450 corridas)
 python scripts/orchestrator_phase3.py --run
 ```
 
 Requiere `results/phase2_top.json`. Para cada uno de los 5 configs
-ganadores, corre las 16 variantes de `PHASE3_CANDIDATES` (un baseline —
+ganadores, corre las 18 variantes de `PHASE3_CANDIDATES` (un baseline —
 los defaults de `main.py` — más una perilla movida a la vez: 4 `vae_beta`,
-3 `vae_dropout`, 3 `kan_num_basis`, 3 `kan_hidden_dim`, 2
-`kan_weight_decay`) x 5 seeds = 400 corridas. `kan_lr`/`kan_batch_size` no
-se sweepean — un sweep anterior ya encontró que ganan en su default.
+3 `vae_dropout`, 3 `kan_num_basis`, 4 `kan_hidden_dim` (8/16/32/128, más
+64 como baseline — cubre todo el rango 8–128), 2 `kan_weight_decay`; más
+una variante combinada, `combo_basis8_hidden16_wdhigh`, que mueve
+`kan_num_basis`, `kan_hidden_dim` y `kan_weight_decay` a la vez) x 5 seeds
+= 450 corridas. `kan_lr`/`kan_batch_size` no se sweepean — un sweep
+anterior ya encontró que ganan en su default.
 
 **VAE compartida vs. aislada**: `--merge_vae_latents` de `main.py` siempre
 lee de la ruta fija `data/05_vae_latents/{branch}/latent{dim}/`. Las
@@ -89,7 +92,7 @@ manualmente (`experiment_runner.resolve_kan_input` /
 `merge_latents_manual`), apuntando `--train_kan` a esos PKLs vía
 `--kan_train_pkl`/`--kan_val_pkl`/`--kan_test_pkl`.
 
-Ranking: 5 configs x 16 variantes = 80 combinaciones → top 5 global,
+Ranking: 5 configs x 18 variantes = 90 combinaciones → top 5 global,
 totalmente resuelto (extractores + dims + los 5 hiperparámetros). Salida:
 `results/phase3_top.json`.
 
@@ -151,8 +154,8 @@ línea) se reintentan automáticamente — no hay flag especial de resume.
 
 ## Costo esperado
 
-Fase 1: 85 corridas. Fase 2: 75. Fase 3: 400. Fase 4: 125. Fase 5: 125.
-Total: 810 corridas KAN-only (más el entrenamiento puntual de las VAEs que
+Fase 1: 85 corridas. Fase 2: 75. Fase 3: 450. Fase 4: 125. Fase 5: 125.
+Total: 860 corridas KAN-only (más el entrenamiento puntual de las VAEs que
 falten en cada cache). Orden de segundos-minutos por corrida KAN-only en
 GPU/CPU del servidor; el arranque de cada subproceso `python main.py ...`
 importa torch/tensorflow/transformers/spaCy sin importar qué flag se use

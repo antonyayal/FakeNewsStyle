@@ -64,11 +64,20 @@ PHASE3_CANDIDATES = {
     "basis_4": {"kan_num_basis": 4},
     "basis_8": {"kan_num_basis": 8},
     "basis_32": {"kan_num_basis": 32},
+    "hidden_8": {"kan_hidden_dim": 8},
     "hidden_16": {"kan_hidden_dim": 16},
     "hidden_32": {"kan_hidden_dim": 32},
     "hidden_128": {"kan_hidden_dim": 128},
     "wd_low": {"kan_weight_decay": 1e-5},
     "wd_high": {"kan_weight_decay": 1e-3},
+    # Combined variant (not one-knob-at-a-time): num_basis + hidden_dim both
+    # lowered together with weight_decay raised, checked manually against
+    # results/ on 2026-09-02 and found nowhere in the existing sweep.
+    "combo_basis8_hidden16_wdhigh": {
+        "kan_num_basis": 8,
+        "kan_hidden_dim": 16,
+        "kan_weight_decay": 1e-3,
+    },
 }
 
 # kan_lr / kan_batch_size are never swept -- a prior sweep already found the
