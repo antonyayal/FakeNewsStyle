@@ -21,6 +21,14 @@ Feature-set version (StyleExtractorConfig.feature_version):
   narrative-vs-argumentative contrast, perception/intrigue verbs)
   -> 47 features. Verb groups are matched on spaCy lemmas when a doc is
   available, on surface forms otherwise.
+- 3: the revision-plan rework (future_steps/style_extractor_revision.md).
+  Prunes v1 to its 16 keepers (plan list B), replaces the exclamation/
+  question features with sig_excl_char_ratio (A3), and adds the Credibility
+  (cred_*), Interactivity (inter_*), Drama (intr_*) and Readability-
+  dispersion (read_*) scalar facets (C1-C4) -> 36 features. Needs spaCy
+  with NER enabled for the Credibility features. NOT a superset of v1/v2.
+  The C5 vector blocks (function-word / POS / char n-gram SVD) are not
+  included -- they need a fit/transform lifecycle and a larger latent dim.
 
 Why this file exists
 --------------------
@@ -241,6 +249,81 @@ _ELLIPSIS_RE = re.compile(r"\.{3,}|…")
 _WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
 
 
+# =========================================================================
+# feature_version == 3 -- the revision-plan rework
+# (future_steps/style_extractor_revision.md). Prunes v1 to its ~16 keepers
+# (list B), replaces a few (A3), and adds the Credibility / Interactivity /
+# Drama / Readability-dispersion scalar facets (C1-C4). The C5 vector blocks
+# (function-word / POS / char n-gram SVD) are NOT part of v3 -- they need a
+# fit/transform lifecycle and a bigger latent (plan section D).
+# =========================================================================
+
+# Plan section B -- the v1 features that survive into v3.
+V3_KEEP_CORE = (
+    "ifsz", "formality_f", "sconj_per_sent", "verbs_per_sent", "root_ttr",
+    "pos_noun_ratio", "pos_adv_ratio", "pos_det_ratio", "pos_adp_ratio",
+)
+V3_KEEP_SIG = (
+    "sig_punct_ratio", "sig_uppercase_ratio", "sig_stopword_ratio",
+    "sig_digit_ratio", "sig_se_per_sent", "sig_hedge_ratio", "sig_burstiness",
+)
+
+# C1 Credibility lexicons
+DEFAULT_ATTRIBUTION_MARKERS = (
+    "según", "de acuerdo con", "de acuerdo a", "fuentes", "el comunicado",
+    "un comunicado", "informó", "informa", "informaron", "citando", "citó",
+    "portavoz", "vocero", "de fuentes", "según fuentes",
+)
+DEFAULT_REPORTED_SPEECH = {
+    "decir", "afirmar", "asegurar", "declarar", "señalar", "informar",
+    "sostener", "explicar", "indicar", "comentar", "manifestar", "apuntar",
+    "precisar", "agregar", "añadir", "confirmar", "anunciar",
+}
+DEFAULT_STRONG_UNCERTAINTY = {
+    "presuntamente", "supuestamente", "habría", "podría", "podrían", "sería",
+    "serían", "estaría", "estarían", "aparentemente", "hipotéticamente",
+}
+DEFAULT_UNCERTAINTY_PHRASES = (
+    "al parecer", "se cree que", "se especula", "no está claro",
+    "sin confirmar", "no confirmado", "versiones apuntan", "todo apunta a",
+)
+_DATE_RE = re.compile(
+    r"\b\d{1,2}\s+de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|"
+    r"septiembre|setiembre|octubre|noviembre|diciembre)\b"
+    r"|\b(?:19|20)\d{2}\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b",
+    flags=re.IGNORECASE,
+)
+_URL_RE = re.compile(
+    r"https?://|www\.|\b[\w-]+\.(?:com|net|org|es|mx|info|gob|edu|io|tv)\b",
+    flags=re.IGNORECASE,
+)
+
+# C2 Interactivity
+FIRST_PERSON_WORDS = {
+    "yo", "me", "mí", "conmigo", "nosotros", "nosotras", "nos", "nuestro",
+    "nuestra", "nuestros", "nuestras",
+}
+SECOND_PERSON_WORDS = {
+    "tú", "te", "ti", "contigo", "usted", "ustedes", "vosotros", "vosotras",
+    "os", "vuestro", "vuestra", "vuestros", "vuestras", "tuyo", "tuya",
+}
+INTERROGATIVE_WORDS = {
+    "qué", "cómo", "cuándo", "dónde", "adónde", "quién", "quiénes", "cuál",
+    "cuáles", "cuánto", "cuánta", "cuántos", "cuántas", "por qué",
+}
+
+# C3 Interestingness / drama
+DEFAULT_ADVERSATIVE = (
+    "sin embargo", "no obstante", "en cambio", "ahora bien", "por el contrario",
+    "aun así",
+)
+_ADVERSATIVE_SINGLE = {"pero", "aunque"}
+_QUOTE_SPAN_RE = re.compile(r"[«\"“]([^«»\"“”]{1,160})[»\"”]")
+
+# C4 Readability dispersion
+_VOWEL_GROUP_RE = re.compile(r"[aeiouáéíóúü]+", flags=re.IGNORECASE)
+
+
 @dataclass
 class StyleExtractorConfig:
     # Feature-set version:
@@ -252,6 +335,9 @@ class StyleExtractorConfig:
     #       urgency/alarm cues, rhetorical-question ratio, reported-speech
     #       verbs, connector density + narrative-vs-argumentative contrast,
     #       perception/intrigue verbs) -> 47 features.
+    #   3 = revision-plan rework: prune v1 to its 16 keepers + Credibility /
+    #       Interactivity / Drama / Readability-dispersion facets (C1-C4)
+    #       -> 36 features. Needs spaCy NER. Not a superset of v1/v2.
     feature_version: int = 1
 
     # spaCy model for Spanish (recommended)
@@ -328,11 +414,13 @@ class StyleExtractor:
         self.narrative_connectors = DEFAULT_NARRATIVE_CONNECTORS
         self.argument_connectors = DEFAULT_ARGUMENT_CONNECTORS
 
-        # spaCy pipeline
+        # spaCy pipeline. feature_version >= 3 needs NER (Credibility facet),
+        # v1/v2 disable it for speed.
         self._nlp = None
         if spacy is not None:
+            _disable = [] if self.feature_version >= 3 else ["ner"]
             try:
-                self._nlp = spacy.load(config.spacy_model, disable=["ner"])
+                self._nlp = spacy.load(config.spacy_model, disable=_disable)
                 if not self._nlp.has_pipe("sentencizer"):
                     pass
             except Exception:
@@ -646,8 +734,16 @@ class StyleExtractor:
             "pos_adp_ratio": float(pos_adp_ratio),
             "error_rate": float(error_rate),
         }
-
         feats.update(extra)
+
+        if self.feature_version >= 3:
+            kept = {k: feats[k] for k in V3_KEEP_CORE if k in feats}
+            kept.update({k: feats[k] for k in V3_KEEP_SIG if k in feats})
+            kept.update(self._v3_facets(text_raw, doc_raw, tokens, words_lower,
+                                        [getattr(s, "text", s) for s in sents],
+                                        N, num_sents, len(words_lower)))
+            return self._normalize_feature_dict(kept) if self.config.normalize_features else self._safe_dict(kept)
+
         return self._normalize_feature_dict(feats) if self.config.normalize_features else self._safe_dict(feats)
 
     # -------------------------
@@ -713,6 +809,16 @@ class StyleExtractor:
             "error_rate": float(error_rate),
         }
         feats.update(extra)
+
+        if self.feature_version >= 3:
+            # No spaCy -> the NER-based Credibility features degrade to 0, the
+            # rest are regex/lexicon and still work.
+            kept = {k: feats.get(k, 0.0) for k in V3_KEEP_CORE}
+            kept.update({k: feats.get(k, 0.0) for k in V3_KEEP_SIG})
+            kept.update(self._v3_facets(text_raw, None, None, words_lower, sents,
+                                        N_alpha, num_sents, len(words_lower)))
+            return kept
+
         return feats
 
     # -------------------------
@@ -784,7 +890,7 @@ class StyleExtractor:
             "sig_burstiness": burstiness,
         }
 
-        if self.feature_version >= 2:
+        if self.feature_version == 2:
             feats.update(self._extended_style_signals(
                 text, tokens, words_lower, num_words, num_sents, sent_texts))
 
@@ -902,6 +1008,122 @@ class StyleExtractor:
         }
 
     # -------------------------
+    # feature_version == 3 facets (revision plan A3 + C1-C4)
+    # -------------------------
+
+    @staticmethod
+    def _has_person(tok, p: str) -> bool:
+        try:
+            return p in tok.morph.get("Person")
+        except Exception:
+            return False
+
+    def _v3_facets(self, text: str, doc, tokens, words_lower: List[str],
+                   sent_texts: List[str], num_tokens: int, num_sents: int,
+                   num_words: int) -> Dict[str, float]:
+        T = float(max(num_tokens, 1))
+        S = float(max(num_sents, 1))
+        W = float(max(num_words, 1))
+        low = text.lower()
+
+        # ---- A3: exclamation-mark density (per char); "?" moves to C2 ----
+        excl_char_ratio = float(text.count("!") + text.count("¡")) / float(max(len(text), 1))
+
+        # ---- C1 Credibility ----
+        if tokens is not None:
+            numer = sum(1 for t in tokens
+                        if getattr(t, "pos_", "") == "NUM" or getattr(t, "like_num", False))
+        else:
+            numer = sum(1 for w in words_lower if any(c.isdigit() for c in w))
+        numeral_ratio = float(numer) / T
+
+        ents = list(getattr(doc, "ents", [])) if doc is not None else []
+        entity_ratio = float(len(ents)) / T
+        who = sum(1 for e in ents if e.label_ in ("PER", "PERSON", "ORG"))
+        where = sum(1 for e in ents if e.label_ in ("LOC", "GPE"))
+        who_ratio = float(who) / S
+        where_ratio = float(where) / S
+        when_ratio = float(len(_DATE_RE.findall(text))) / S
+
+        if tokens is not None:
+            speech = sum(1 for t in tokens
+                         if getattr(t, "lemma_", "").lower() in DEFAULT_REPORTED_SPEECH)
+        else:
+            speech = sum(1 for w in words_lower if w in self.speech_verb_surface)
+        quote_chars = (text.count('"') + text.count("«") + text.count("»")
+                       + text.count("“") + text.count("”"))
+        quote_density = float(speech + quote_chars / 2.0) / S
+
+        attribution = sum(low.count(m) for m in DEFAULT_ATTRIBUTION_MARKERS)
+        attribution_ratio = float(attribution) / S
+
+        unc = sum(1 for w in words_lower if w in DEFAULT_STRONG_UNCERTAINTY)
+        unc += sum(low.count(p) for p in DEFAULT_UNCERTAINTY_PHRASES)
+        uncertainty_ratio = float(unc) / W
+
+        url_present = 1.0 if _URL_RE.search(text) else 0.0
+
+        # ---- C2 Interactivity ----
+        p1 = p2 = 0
+        if tokens is not None:
+            p1 = sum(1 for t in tokens if self._has_person(t, "1"))
+            p2 = sum(1 for t in tokens if self._has_person(t, "2"))
+        p1 += sum(1 for w in words_lower if w in FIRST_PERSON_WORDS)
+        p2 += sum(1 for w in words_lower if w in SECOND_PERSON_WORDS)
+        first_person_ratio = float(p1) / T
+        second_person_ratio = float(p2) / T
+
+        interr = sum(1 for w in words_lower if w in INTERROGATIVE_WORDS)
+        interr += sum(low.count(p) for p in INTERROGATIVE_WORDS if " " in p)
+        interrogative_ratio = float(interr) / S
+        question_ratio = float(text.count("?")) / S
+
+        # ---- C3 Interestingness / drama ----
+        adversative = sum(low.count(c) for c in DEFAULT_ADVERSATIVE)
+        adversative += sum(1 for w in words_lower if w in _ADVERSATIVE_SINGLE)
+        adversative_ratio = float(adversative) / S
+        scare = sum(1 for m in _QUOTE_SPAN_RE.findall(text) if len(m.split()) <= 4)
+        scare_quote_ratio = float(scare) / S
+
+        # ---- C4 Readability dispersion ----
+        lens = [len(_WORD_RE.findall(s)) for s in sent_texts if s and s.strip()]
+        lens = [x for x in lens if x > 0]
+        if lens:
+            mu = sum(lens) / len(lens)
+            sd = (sum((x - mu) ** 2 for x in lens) / len(lens)) ** 0.5
+            sent_len_cv = sd / mu if mu else 0.0
+            pct_short = sum(1 for x in lens if x < 8) / len(lens)
+            pct_long = sum(1 for x in lens if x > 30) / len(lens)
+        else:
+            sent_len_cv = pct_short = pct_long = 0.0
+        complex_words = sum(1 for w in words_lower
+                            if len(_VOWEL_GROUP_RE.findall(w)) >= 3)
+        complex_word_ratio = float(complex_words) / W
+
+        return {
+            "sig_excl_char_ratio": excl_char_ratio,
+            "cred_numeral_ratio": numeral_ratio,
+            "cred_entity_ratio": entity_ratio,
+            "cred_when_ratio": when_ratio,
+            "cred_where_ratio": where_ratio,
+            "cred_who_ratio": who_ratio,
+            "cred_quote_density": quote_density,
+            "cred_attribution_ratio": attribution_ratio,
+            "cred_uncertainty_ratio": uncertainty_ratio,
+            "cred_url_present": url_present,
+            "inter_first_person_ratio": first_person_ratio,
+            "inter_second_person_ratio": second_person_ratio,
+            "inter_interrogative_ratio": interrogative_ratio,
+            "inter_question_ratio": question_ratio,
+            "intr_adversative_ratio": adversative_ratio,
+            "intr_scare_quote_ratio": scare_quote_ratio,
+            "read_sent_len_cv": sent_len_cv,
+            "read_pct_short_sent": pct_short,
+            "read_pct_long_sent": pct_long,
+            "read_complex_word_ratio": complex_word_ratio,
+        }
+
+    # -------------------------
     # Normalization by type
     # -------------------------
 
@@ -948,6 +1170,18 @@ class StyleExtractor:
             "sig_rhetorical_q_ratio",
             "sig_connector_narr_ratio",
             "sig_intrigue_verb_ratio",
+            # feature_version == 3
+            "sig_excl_char_ratio",
+            "cred_numeral_ratio",
+            "cred_entity_ratio",
+            "cred_uncertainty_ratio",
+            "cred_url_present",
+            "inter_first_person_ratio",
+            "inter_second_person_ratio",
+            "read_pct_short_sent",
+            "read_pct_long_sent",
+            "read_complex_word_ratio",
+            "read_sent_len_cv",
         }
 
         positive_count_like = {
@@ -967,6 +1201,16 @@ class StyleExtractor:
             "sig_alarm_cue_per_sent",
             "sig_speech_verb_per_sent",
             "sig_connector_per_sent",
+            # feature_version == 3
+            "cred_when_ratio",
+            "cred_where_ratio",
+            "cred_who_ratio",
+            "cred_quote_density",
+            "cred_attribution_ratio",
+            "inter_interrogative_ratio",
+            "inter_question_ratio",
+            "intr_adversative_ratio",
+            "intr_scare_quote_ratio",
         }
 
         for k, v in feats.items():

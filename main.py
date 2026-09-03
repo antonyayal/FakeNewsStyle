@@ -266,12 +266,15 @@ parser.add_argument(
     "--style_feature_version",
     type=int,
     default=1,
-    choices=[1, 2],
-    help="Style feature set: 1 = original 35 features (default), "
+    choices=[1, 2, 3],
+    help="Style feature set: 1 = original 35 features (default); "
     "2 = +12 extra lexical/surface features (expressive punctuation, ALL-CAPS "
     "words, degree adverbs, superlatives, hyperbolic quantifiers, urgency/alarm "
     "cues, rhetorical questions, speech verbs, connector density + "
-    "narrative-vs-argumentative contrast, intrigue verbs) -> 47 features",
+    "narrative-vs-argumentative contrast, intrigue verbs) -> 47 features; "
+    "3 = revision-plan rework: prune v1 to 16 keepers + Credibility/"
+    "Interactivity/Drama/Readability-dispersion facets -> 36 features "
+    "(needs spaCy NER)",
 )
 parser.add_argument("--style_input_dir", type=str, default=None)
 parser.add_argument("--style_output_dir", type=str, default=None,
@@ -384,6 +387,11 @@ parser.add_argument("--kan_train_pkl", type=str, default=None)
 parser.add_argument("--kan_val_pkl", type=str, default=None)
 parser.add_argument("--kan_test_pkl", type=str, default=None)
 parser.add_argument("--kan_output_dir", type=str, default=None)
+parser.add_argument("--results_dir", type=str, default=None,
+                     help="Override for where --train_kan writes its "
+                          "{run_id}.json experiment record (default: results/). "
+                          "Use it to keep an ad-hoc comparison out of the "
+                          "results/ dir a running experiment / report_builder scans.")
 parser.add_argument("--kan_feature_key", type=str, default=None)
 parser.add_argument("--kan_label_key", type=str, default="label")
 parser.add_argument("--kan_num_basis", type=int, default=16)
@@ -1171,6 +1179,7 @@ if args.train_kan:
         num_parameters=kan_result.get("num_parameters"),
         dataset_hash=dataset_hash,
         topic_breakdown=topic_breakdown,
+        results_dir=Path(args.results_dir) if args.results_dir else None,
     )
 else:
     print("KAN training skipped")
