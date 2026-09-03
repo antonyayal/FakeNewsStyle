@@ -210,9 +210,26 @@ python main.py --corpus_mode source_disjoint --source_split_n 5 --source_split_i
 5. **Phase 5 — robustness to leakage by outlet.** The *same* top 5 from Phase 3 (an independent branch, not chained after Phase 4) revalidated across 5 source-disjoint folds (`--corpus_mode source_disjoint`) — the definitive test of the Source/Domain leakage described in "Known Limitations & Caveats" below. → `results/phase5_per_fold.json` + `results/phase5_top.json`.
 6. **Phase 6 — identity-free context control.** A sibling of Phase 2, not a continuation of Phase 5 — it only depends on Phase 1's semantic/emotion/style dimensions, so it can run any time, interleaved with Phase 1–5. Re-runs the *same* Phase 1→5 protocol with `context`'s `Source`/`Domain` hash embeddings switched off (`--context_source_dim 0 --context_domain_dim 0`, only Topic+age+flags left) to separate genuine contextual signal from outlet memorization, in 5 stages selectable via `--stage {ab,c,d,e,all}`: **A/B** = Phase 1/2 equivalent (context-alone dim sweep, then the 15 combos), **C** = Phase 3 equivalent (hyperparameters on Stage B's top 5, pooled with Stage A + Phase 1's solo-branch alternates), **D/E** = Phase 4/5 equivalent (kfold / source-disjoint validation of Stage C's top 5) — guarded to refuse running for real until the actual Phase 4/5 has *finished* (not just started), since both share the same per-fold cache and running concurrently would corrupt it. Fully isolated from the shared cache Phase 1–5 read (own `*_phase6` data/model paths via `main.py --context_output_dir`/`--context_vae_input_dir`). Built and dry-run-verified; not yet executed for real — see "Known Limitations & Caveats" below. → `results/phase6_top.json`, `results/phase6_stageC_top.json`, `results/phase6_stageD_top.json`, `results/phase6_stageE_top.json`.
 
----
+#### Suggested: run the whole plan overnight
 
-### 🔹 Individual steps
+```bash
+source venv/bin/activate
+nohup bash -c '
+  python scripts/orchestrator_phase1.py --run &&
+  python scripts/orchestrator_phase2.py --run &&
+  python scripts/orchestrator_phase3.py --run &&
+  python scripts/orchestrator_phase4.py --run &&
+  python scripts/orchestrator_phase5.py --run &&
+  python scripts/orchestrator_phase6.py --run
+' > logs/overnight_run.out 2>&1 &
+disown
+```
+
+`&&`-chained so a failure anywhere stops the rest rather than silently continuing on bad input; each step is resumable on its own (re-running the same `--run` skips whatever already succeeded). `nohup ... & disown` keeps it alive after the SSH session ends — check progress with `tail -f logs/overnight_run.out`.
+
+Two things worth knowing before relying on this exact command:
+- **Phase 6 here only runs Stage A/B** — `--stage` defaults to `ab`, so this does Phase 6's dimension sweep + 15-combo ranking but not Stage C's hyperparameter tuning or Stage D/E's fold validation. Run those explicitly afterward (`--stage c`, then `--stage d` / `--stage e`) once you want the full identity-free cascade — Stage D/E's safety check (see above) requires Phase 4/5 to have already finished, which this chain guarantees.
+- **Fastest to try it once, in `--dry-run`, before committing to the real thing** — swap any `--run` for `--run --dry-run` to see the exact plan (commands, run counts) without training anything.
 
 ```bash
 python main.py --extract_semantic
