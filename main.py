@@ -274,6 +274,16 @@ parser.add_argument(
     "narrative-vs-argumentative contrast, intrigue verbs) -> 47 features",
 )
 parser.add_argument("--style_input_dir", type=str, default=None)
+parser.add_argument("--style_output_dir", type=str, default=None,
+                     help="Override for where raw style features are written "
+                          "(default: FEATURES_RAW_DIR/style). Lets a v2 style "
+                          "variant (--style_feature_version 2) coexist with the "
+                          "v1 default cache other runs read.")
+parser.add_argument("--style_vae_input_dir", type=str, default=None,
+                     help="Override for where --run_vaes reads style's raw "
+                          "{split}_style.pkl from (default: FEATURES_RAW_DIR/"
+                          "style). Pair with --style_output_dir so an isolated "
+                          "style variant's VAE trains on its own raw features.")
 parser.add_argument("--style_text_column", type=str, default="text_xlmr")
 parser.add_argument("--style_id_column", type=str, default="Id")
 parser.add_argument("--style_spacy_model", type=str, default="es_core_news_sm")
@@ -624,7 +634,7 @@ if args.extract_style:
     print("Extracting style features (spaCy/textstat/wordfreq)")
 
     style_input_dir = _default_input_dir(args.style_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    style_output_dir = FEATURES_RAW_DIR / "style"
+    style_output_dir = Path(args.style_output_dir) if args.style_output_dir else FEATURES_RAW_DIR / "style"
     style_output_dir.mkdir(parents=True, exist_ok=True)
 
     style_extractor = StyleExtractor(
@@ -826,9 +836,9 @@ if args.run_vaes:
             "latent_dim": int(args.style_latent_dim),
             "hidden_dims": [128, 64],
             "feature_columns": None,
-            "train_pkl": FEATURES_RAW_DIR / "style" / "train_style.pkl",
-            "val_pkl": FEATURES_RAW_DIR / "style" / "val_style.pkl",
-            "test_pkl": FEATURES_RAW_DIR / "style" / "test_style.pkl",
+            "train_pkl": (Path(args.style_vae_input_dir) if args.style_vae_input_dir else FEATURES_RAW_DIR / "style") / "train_style.pkl",
+            "val_pkl": (Path(args.style_vae_input_dir) if args.style_vae_input_dir else FEATURES_RAW_DIR / "style") / "val_style.pkl",
+            "test_pkl": (Path(args.style_vae_input_dir) if args.style_vae_input_dir else FEATURES_RAW_DIR / "style") / "test_style.pkl",
         },
         "context": {
             "enabled": not args.exclude_context,
