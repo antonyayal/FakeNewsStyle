@@ -13,7 +13,15 @@ outputs/
 results/
 results_old/
 results_old_2/
+results_old_3/
 logs/
+
+# graphify knowledge graph (regenerable via `graphify extract .` / `graphify update .`)
+graphify-out/
+
+# Personal Claude Code settings (machine-specific paths/permissions) --
+# .claude/settings.json (shared hooks) stays tracked.
+.claude/settings.local.json
 
 # Pipeline-derived intermediates (regenerable via main.py --step) -- covers
 # the base stage dirs and every variant suffix (_cv, _source_cv, _phase6,
