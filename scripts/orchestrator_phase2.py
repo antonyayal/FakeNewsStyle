@@ -1,27 +1,26 @@
 # scripts/orchestrator_phase2.py
 # -*- coding: utf-8 -*-
 """
-Phase 2: extractor combinations -- the 15 non-empty subsets of {semantic,
-emotion, style, context} x the 5 fixed seeds from experiment_config.SEEDS =
-75 runs. Each active branch uses its rank-1 latent dimension from Phase 1
-(results/phase1_top.json) -- Phase 1's top-2 per branch are NOT crossed
-here, only the single best dimension per branch is used for every combo.
+Phase 2 (Option A): standard-split evaluation -- the in-distribution result.
 
-The VAE for each active branch (at its Phase-1-winning dim) trains ONCE via
-experiment_runner.ensure_vae_latents and is reused across the 15 combos that
-include it and their 5 seeds each.
+Runs every extractor combination, unfiltered:
+  - the 15 non-empty subsets of {semantic, emotion, style, context};
+  - each combo that includes `context` is run twice, with the Source/Domain
+    hash embeddings ON and OFF (identity-free);
+  - each of those 23 combo-variants at both kan_hidden_dim values;
+  - x SEEDS.
+= 23 x 2 x 3 = 138 KAN runs on the fixed train/val/test split.
 
-Phase 2 does NOT filter down to a top-K before handing off to Phase 3 --
-all 15 combos (each fully resolved: extractors + Phase 1's winning dims)
-are written to results/phase2_top.json and all 15 get hyperparameter-tuned
-in Phase 3. Filtering on raw/default-hyperparameter performance before
-hyperparameter tuning would let a combo that's mediocre under the default
-KAN/VAE settings get discarded before it ever had a chance to shine under a
-different setting (see e.g. 2026-09-03: with the leaky context branch, the
-5-combo cutoff meant only context-containing combos ever reached Phase 3's
-hyperparameter sweep). The only "top" selection left is Phase 1's dimension
-choice per branch and, downstream, Phase 3's own top-5 after hyperparameters
-have had a fair shot at every combo.
+VAE + KAN hyperparameters are fixed (experiment_config.FINAL_HPARAMS); only
+kan_hidden_dim varies. Non-context branches and identity-ON context read the
+shared VAE cache (data/05_vae_latents/); identity-OFF context is trained into
+its own isolated cache (data/05_vae_latents_idfree/). Per prep-unit the
+branch latents are concatenated once into KAN-ready PKLs, then the
+hidden_dim x seed grid is pure KAN training on top.
+
+Context dims come from results/phase1_top.json (fallbacks in
+experiment_config if Phase 1 hasn't run). Checkpoint/resume via
+results/orchestrator_phase2.jsonl + run_key.
 
 Usage:
     python scripts/orchestrator_phase2.py --run
@@ -32,7 +31,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import sys
 from pathlib import Path
@@ -43,73 +41,57 @@ import pandas as pd
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from aggregate_results import aggregate_by_config, load_runs  # noqa: E402
 from experiment_config import (  # noqa: E402
-    ALL_MODALITIES,
     BASE_DIR,
+    HIDDEN_DIM_GRID,
     KAN_RUNS_DIR,
-    PHASE1_TOP_JSON,
+    PHASE2_MERGED_DIR,
     PHASE2_RESULTS_JSONL,
     PHASE2_TOP_JSON,
     RANKING_METRIC,
     SEEDS,
+    VAE_LATENTS_DIR,
 )
-from experiment_runner import (  # noqa: E402
-    ensure_vae_latents,
-    execute_and_log,
-    load_ok_run_keys,
-    python_executable,
+from experiment_plan import (  # noqa: E402
+    build_kan_cmd,
+    build_prep_units,
+    entry_label,
+    ensure_idfree_context,
+    iter_kan_entries,
+    load_context_dims,
+    merge_kan_inputs,
+    total_kan_runs,
 )
+from experiment_runner import ensure_vae_latents, execute_and_log, load_ok_run_keys  # noqa: E402
 
 
-def all_nonempty_combos(modalities: List[str]) -> List[List[str]]:
-    combos = []
-    for r in range(1, len(modalities) + 1):
-        combos.extend(list(c) for c in itertools.combinations(modalities, r))
-    return combos
+def prepare_standard(unit: Dict[str, Any], dry_run: bool) -> Dict[str, Path]:
+    """Branch latents -> KAN-ready {split}.pkl for one prep unit."""
+    combo = unit["active_extractors"]
+    latent_dims = unit["latent_dims"]
+    mode = unit["context_identity"]
+
+    latent_dirs: Dict[str, Path] = {}
+    non_context = [b for b in combo if b != "context"]
+    shared = non_context + (["context"] if mode == "on" else [])
+    if shared:
+        ensure_vae_latents(shared, latent_dims, dry_run=dry_run)
+        for b in shared:
+            latent_dirs[b] = VAE_LATENTS_DIR / b / f"latent{latent_dims[b]}"
+    if mode == "off":
+        latent_dirs["context"] = ensure_idfree_context(latent_dims["context"], fold_idx=None, dry_run=dry_run)
+
+    merged_dir = PHASE2_MERGED_DIR / unit["prep_label"]
+    return merge_kan_inputs(combo, latent_dirs, merged_dir, dry_run)
 
 
-COMBOS = all_nonempty_combos(ALL_MODALITIES)
-
-
-def combo_label(combo: List[str]) -> str:
-    return "_".join(combo)
-
-
-def run_key_for(combo: List[str], seed: int) -> str:
-    return f"{combo_label(combo)}__seed{seed}"
-
-
-def load_phase1_dims() -> Dict[str, int]:
-    if not PHASE1_TOP_JSON.exists():
-        raise FileNotFoundError(
-            f"{PHASE1_TOP_JSON} not found. Run scripts/orchestrator_phase1.py --run first."
-        )
-    with open(PHASE1_TOP_JSON, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return {branch: entries[0]["dim"] for branch, entries in data["by_branch"].items()}
-
-
-def build_kan_command(combo: List[str], dims: Dict[str, int], seed: int) -> List[str]:
-    cmd = [python_executable(), "main.py", "--merge_vae_latents", "--train_kan"]
-
-    for branch in ALL_MODALITIES:
-        if branch not in combo:
-            cmd.append(f"--exclude_{branch}")
-        cmd += [f"--{branch}_latent_dim", str(dims[branch])]
-
-    output_dir = KAN_RUNS_DIR / "phase2" / combo_label(combo) / f"seed{seed}"
-    cmd += [
-        "--kan_seed", str(seed),
-        "--kan_output_dir", str(output_dir.relative_to(BASE_DIR)),
-    ]
-    return cmd
-
-
-def run_sweep(dims: Dict[str, int], dry_run: bool) -> None:
-    total = len(COMBOS) * len(SEEDS)
-    print(f"Phase 2: {len(COMBOS)} combos x {len(SEEDS)} seeds = {total} runs")
-    print(f"Using Phase 1 dims: {dims}")
+def run_sweep(dry_run: bool) -> None:
+    on_dim, off_dim = load_context_dims()
+    prep_units = build_prep_units(on_dim, off_dim)
+    total = total_kan_runs(prep_units)
+    print(f"Phase 2: {len(prep_units)} combo-variants x {len(HIDDEN_DIM_GRID)} "
+          f"hidden_dim x {len(SEEDS)} seeds = {total} runs")
+    print(f"context dims: identity ON = {on_dim}, identity OFF = {off_dim}")
     print(f"Results: {PHASE2_RESULTS_JSONL}")
 
     ok_keys = load_ok_run_keys(PHASE2_RESULTS_JSONL) if not dry_run else set()
@@ -117,41 +99,53 @@ def run_sweep(dims: Dict[str, int], dry_run: bool) -> None:
         print(f"Resuming: {len(ok_keys)}/{total} runs already completed, skipping.")
 
     n_run = n_skip = n_failed = idx = 0
+    prepared: Dict[str, Dict[str, Path]] = {}
 
-    for combo in COMBOS:
-        ensure_vae_latents(combo, dims, dry_run=dry_run)
+    for unit, hidden_dim in iter_kan_entries(prep_units):
+        combo = unit["active_extractors"]
+        latent_dims = unit["latent_dims"]
+        mode = unit["context_identity"]
+        plabel = unit["prep_label"]
+        elabel = entry_label(combo, mode, hidden_dim)
+
+        if plabel not in prepared:
+            print(f"\n=== Phase 2 -- prep {plabel} ===")
+            prepared[plabel] = prepare_standard(unit, dry_run)
+        pkl_paths = prepared[plabel]
 
         for seed in SEEDS:
             idx += 1
-            key = run_key_for(combo, seed)
-            label = f"[{idx:03d}/{total}] {key}"
+            key = f"{elabel}__seed{seed}"
+            run_label = f"[{idx:03d}/{total}] {key}"
+            output_dir = KAN_RUNS_DIR / "phase2" / elabel / f"seed{seed}"
+            cmd = build_kan_cmd(
+                combo=combo, latent_dims=latent_dims, pkl_paths=pkl_paths,
+                hidden_dim=hidden_dim, seed=seed, output_dir=output_dir,
+            )
 
             if dry_run:
-                cmd = build_kan_command(combo, dims, seed)
-                print(f"{label}\n  $ {' '.join(cmd)}")
+                print(f"{run_label}\n  $ {' '.join(cmd)}")
                 continue
-
             if key in ok_keys:
-                print(f"{label} SKIP (already completed)")
+                print(f"{run_label} SKIP (already completed)")
                 n_skip += 1
                 continue
 
-            cmd = build_kan_command(combo, dims, seed)
-            print(f"{label} RUN\n  $ {' '.join(cmd)}")
-
+            print(f"{run_label} RUN")
             record = execute_and_log(
-                run_key=key,
-                cmd=cmd,
-                jsonl_path=PHASE2_RESULTS_JSONL,
+                run_key=key, cmd=cmd, jsonl_path=PHASE2_RESULTS_JSONL,
                 meta={
                     "phase": "phase2",
+                    "entry_label": elabel,
+                    "prep_label": plabel,
                     "active_extractors": combo,
+                    "context_identity": mode,
+                    "hidden_dim": hidden_dim,
+                    "latent_dims": latent_dims,
                     "seed": seed,
-                    "overrides": {},
-                    "kan_output_dir": str(cmd[cmd.index("--kan_output_dir") + 1]),
+                    "kan_output_dir": str(output_dir.relative_to(BASE_DIR)),
                 },
             )
-
             if record["status"] == "ok":
                 n_run += 1
                 print(f"  OK in {record['elapsed_seconds']}s -- {record['results_json']}")
@@ -163,49 +157,70 @@ def run_sweep(dims: Dict[str, int], dry_run: bool) -> None:
         print(f"\ndry-run: {total} runs planned (not executed).")
         return
 
-    print(f"\nPhase 2 complete (this invocation): {n_run} new runs, {n_skip} skipped, {n_failed} failed.")
+    print(f"\nPhase 2 complete (this invocation): {n_run} new, {n_skip} skipped, {n_failed} failed.")
     print(f"Total accumulated in {PHASE2_RESULTS_JSONL}: {len(load_ok_run_keys(PHASE2_RESULTS_JSONL))}/{total} ok.")
 
 
 def summarize() -> None:
-    phase2_df = load_runs(PHASE2_RESULTS_JSONL)
-
-    if phase2_df.empty:
-        print("No successful runs logged yet -- nothing to rank.")
+    if not PHASE2_RESULTS_JSONL.exists():
+        print(f"No results yet: {PHASE2_RESULTS_JSONL}")
         return
 
-    dims = load_phase1_dims()
-    ranking = aggregate_by_config(phase2_df, group_by="extractors", metric=RANKING_METRIC)
+    rows: List[Dict[str, Any]] = []
+    with open(PHASE2_RESULTS_JSONL, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            if record.get("status") != "ok" or not record.get("metrics"):
+                continue
+            rows.append({
+                "entry_label": record["entry_label"],
+                "active_extractors": record.get("active_extractors"),
+                "context_identity": record.get("context_identity"),
+                "hidden_dim": record.get("hidden_dim"),
+                "seed": record.get("seed"),
+                RANKING_METRIC: record["metrics"].get(RANKING_METRIC),
+                f"test_{RANKING_METRIC}": (record.get("test_metrics") or {}).get(RANKING_METRIC),
+                "test_accuracy": (record.get("test_metrics") or {}).get("accuracy"),
+            })
+    if not rows:
+        print("No successful runs logged yet.")
+        return
 
-    print(f"\n=== Phase 2 -- all {len(ranking)} combos, ranked by val {RANKING_METRIC} "
-          f"(all pass through to Phase 3, none filtered out here) ===")
-    entries = []
-    for i, row in ranking.iterrows():
-        combo = [m for m in ALL_MODALITIES if m in row["config"].split("+")]
-        combo_dims = {b: dims[b] for b in combo}
-
-        test_col = f"test_{RANKING_METRIC}_mean"
-        test_str = f"  (test {RANKING_METRIC}={row[test_col]:.4f})" if test_col in row and pd.notna(row[test_col]) else ""
-        print(f"  {i + 1}. {row['config']}  dims={combo_dims}  val {RANKING_METRIC}_mean={row[f'{RANKING_METRIC}_mean']:.4f} "
-              f"+/- {row[f'{RANKING_METRIC}_std']:.4f} (n={int(row[f'{RANKING_METRIC}_count'])}){test_str}")
-        entries.append({
-            "active_extractors": combo,
-            "latent_dims": combo_dims,
-            f"{RANKING_METRIC}_mean": float(row[f"{RANKING_METRIC}_mean"]),
-            f"{RANKING_METRIC}_std": float(row[f"{RANKING_METRIC}_std"]),
-            "n_runs": int(row[f"{RANKING_METRIC}_count"]),
-            **({f"test_{RANKING_METRIC}_mean": float(row[test_col])} if test_col in row and pd.notna(row[test_col]) else {}),
+    df = pd.DataFrame(rows)
+    ranked: List[Dict[str, Any]] = []
+    for label, group in df.groupby("entry_label"):
+        ranked.append({
+            "entry_label": label,
+            "active_extractors": group.iloc[0]["active_extractors"],
+            "context_identity": group.iloc[0]["context_identity"],
+            "hidden_dim": int(group.iloc[0]["hidden_dim"]),
+            "n_runs": int(len(group)),
+            f"{RANKING_METRIC}_mean": float(group[RANKING_METRIC].mean()),
+            f"{RANKING_METRIC}_std": float(group[RANKING_METRIC].std()),
+            f"test_{RANKING_METRIC}_mean": float(group[f"test_{RANKING_METRIC}"].mean()),
+            f"test_{RANKING_METRIC}_std": float(group[f"test_{RANKING_METRIC}"].std()),
+            "test_accuracy_mean": float(group["test_accuracy"].mean()),
         })
+    ranked.sort(key=lambda r: r[f"{RANKING_METRIC}_mean"], reverse=True)
+
+    print(f"\n=== Phase 2 -- all {len(ranked)} combo-variants, ranked by val {RANKING_METRIC} ===")
+    for i, r in enumerate(ranked, start=1):
+        print(f"  {i:2d}. {r['entry_label']:<42} "
+              f"val {RANKING_METRIC}={r[f'{RANKING_METRIC}_mean']:.4f}  "
+              f"test {RANKING_METRIC}={r[f'test_{RANKING_METRIC}_mean']:.4f}")
 
     PHASE2_TOP_JSON.parent.mkdir(parents=True, exist_ok=True)
     with open(PHASE2_TOP_JSON, "w", encoding="utf-8") as f:
-        json.dump({"metric": RANKING_METRIC, "top": entries}, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved: {PHASE2_TOP_JSON} ({len(entries)} combos, all forwarded to Phase 3)")
+        json.dump({"metric": RANKING_METRIC, "seeds": SEEDS, "results": ranked}, f, indent=2, ensure_ascii=False)
+    print(f"\nSaved: {PHASE2_TOP_JSON}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 2: extractor combinations using Phase 1's winning dims")
-    parser.add_argument("--run", action="store_true", help="Run the full sweep (resumable)")
+    parser = argparse.ArgumentParser(description="Phase 2 (Option A): standard-split evaluation of all combo-variants")
+    parser.add_argument("--run", action="store_true", help="Run the sweep (resumable)")
     parser.add_argument("--summary", action="store_true", help="Aggregate results/orchestrator_phase2.jsonl")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -214,11 +229,9 @@ def main():
         parser.error("Pass at least one of --run, --summary")
 
     if args.run:
-        dims = load_phase1_dims()
-        run_sweep(dims, dry_run=args.dry_run)
+        run_sweep(dry_run=args.dry_run)
         if not args.dry_run:
             summarize()
-
     if args.summary and not args.run:
         summarize()
 

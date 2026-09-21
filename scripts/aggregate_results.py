@@ -1,19 +1,17 @@
 # scripts/aggregate_results.py
 # -*- coding: utf-8 -*-
 """
-Aggregates the results of an orchestration JSON-lines file (any of the 5
-phases): groups by configuration, computes mean +/- standard deviation of
-each metric across runs (one per seed), sorts by the mean of the ranking
-metric (F1 by default), and applies a Wilcoxon signed-rank test paired by
-seed between the configurations closest to the top to check statistical
-significance.
+Aggregates the results of an orchestration JSON-lines file: groups by
+configuration, computes mean +/- standard deviation of each metric across
+runs (one per seed), sorts by the mean of the ranking metric (F1 by
+default), and applies a Wilcoxon signed-rank test paired by seed between the
+configurations closest to the top to check statistical significance.
 
-Reusable as a module (orchestrator_phase{1,2,3}.py import it to build each
-phase's ranking) and as a CLI:
+Reusable as a module (orchestrator_phase1.py imports it to rank the context
+dim sweep; phases 2 and 3 aggregate inline) and as a CLI:
 
     python scripts/aggregate_results.py --input results/orchestrator_phase1.jsonl --group-by branch_dim
-    python scripts/aggregate_results.py --input results/orchestrator_phase2.jsonl --group-by extractors
-    python scripts/aggregate_results.py --input results/orchestrator_phase3.jsonl --group-by candidate
+    python scripts/aggregate_results.py --input results_old_3/orchestrator_phase2.jsonl --group-by extractors
 """
 
 from __future__ import annotations

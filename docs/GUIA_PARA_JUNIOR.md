@@ -405,54 +405,48 @@ estabilidad entre semillas.
 
 ---
 
-## 8. Las 4 fases experimentales
+## 8. Las 3 fases experimentales
 
-El proyecto avanzó en fases, cada una construida sobre la anterior
-(`scripts/orchestrator_phase{1,2,3,4}.py`, config compartida en
-`scripts/experiment_config.py`):
+El plan de evaluación son 3 fases (`scripts/orchestrator_phase{1,2,3}.py`,
+config compartida en `scripts/experiment_config.py` y
+`scripts/experiment_plan.py`, guía completa en
+`scripts/README_experiments.md`).
 
-### Fase 1 — Selección de combinación de modalidades
-Prueba qué subconjunto de las 4 ramas (`semantic`, `emotion`, `style`,
-`context`) da mejor F1, con `10` semillas fijas por combinación, sobre el
-split original fijo. Resultado: `results/phase1_top3.json` — el top-3 pasa a Fase 2.
+**Los hiperparámetros de VAE y KAN son fijos** (`FINAL_HPARAMS`): un sweep
+viejo de 1 350 corridas (`results_old_3/orchestrator_phase3.jsonl`) mostró
+que ninguna perilla superaba a los defaults de `main.py` por más que el
+ruido de semilla; solo `vae_beta=4.0` claramente empeoraba. La única
+excepción es `kan_hidden_dim` (32 vs 64 fue un volado), que se barre como
+único eje.
 
-### Fase 2 — Barrido de hiperparámetros
-Sobre las combinaciones ganadoras de Fase 1, explora latent dims (small/
-default/large), regularización VAE (beta/dropout), `num_basis`, `hidden_dim`
-y parámetros de entrenamiento del KAN (uno a la vez sobre el baseline).
-**Ganador de Fase 2 (confirmado):** las 4 modalidades activas
-(`semantic+emotion+style+context`), split original fijo,
-**F1 medio = 0.8678** (std=0.0047, n=10 semillas). Guardado en
-`results/phase2_final_top.json`.
+### Fase 1 — Dimensión latente de `context`, por modo de identidad
+Solo se barre la rama `context` (las otras 3 usan los defaults de
+`main.py`). Dos sub-sweeps de `context` solo: identidad **ON**
+(`Source`/`Domain` encendidos, dims `[8,16,32,64,86]`) e identidad **OFF**
+(`--context_source_dim 0 --context_domain_dim 0`, dims `[4,8,16,23]`).
+(5+4) × 3 semillas = **27 corridas**. Elige la mejor dim *dentro de cada
+modo*. → `results/phase1_top.json`.
 
-### Fase 3 — Robustez ante particiones (k-fold estratificado, NO por medio)
-Toma el único config ganador de Fase 2 y lo repite sobre 5 folds
-estratificados por label (`--corpus_mode kfold`), NO por `Source`. Confirma
-que el resultado no es un accidente de qué filas cayeron en test:
-**F1 medio = 0.8624** (std=0.0215, min=0.8123, max=0.9032, 50 corridas = 5
-folds × 10 semillas). Pero **esto no detecta fuga de datos por medio**,
-porque un mismo `Source` puede seguir apareciendo tanto en train como en
-test dentro de un fold — ver sección 9.
+### Fase 2 — Evaluación en split estándar
+Las 15 combinaciones no vacías de las 4 ramas; las 8 que incluyen `context`
+se corren 2 veces (identidad ON / OFF); cada uno de esos **23
+combo-variants** a los 2 valores de `kan_hidden_dim`; × 3 semillas =
+**138 corridas** sobre el split fijo train/val/test. No se filtra nada.
+→ `results/phase2_top.json`.
 
-### Fase 4 — Test definitivo: splits sin fuga por medio (`source_disjoint`)
-Repite el mismo config ganador, pero con `--corpus_mode source_disjoint`:
-ahora ningún medio (`Source`) puede aparecer en más de un split del mismo
-fold (`StratifiedGroupKFold` + `GroupShuffleSplit` agrupado por `Source`,
-`src/data/source_split_corpus.py`). Este es el test que separa "señal
-estilística real" de "memorización del medio".
+### Fase 3 — Test definitivo: splits sin fuga por medio (`source_disjoint`)
+Los mismos 23 combo-variants × 2 `hidden_dim` × 3 semillas × 5 folds
+`source_disjoint` (`--corpus_mode source_disjoint`) = **690 corridas** —
+ningún medio (`Source`) aparece en más de un split del mismo fold
+(`StratifiedGroupKFold` + `GroupShuffleSplit` agrupado por `Source`,
+`src/data/source_split_corpus.py`). El contraste **Fase 2 vs Fase 3**
+cuantifica cuánto del F1 era memorización del medio. → `results/phase3_top.json`
++ `results/phase3_per_fold.json`.
 
-**Estado (2026-08-24):** Fase 4 empezó a correr hoy — hay resultados
-parciales en `results/orchestrator_phase4.jsonl` (10 semillas del fold 0,
-mismos hiperparámetros ganadores de Fase 2: `latent sem=64/emo=8/sty=8/
-ctx=32`, `num_basis=8`, `hidden_dim=16`, `dropout=0.2`, `lr=0.001`,
-`weight_decay=0.001`, `vae_beta=1.0`, `vae_dropout=0.3`). Los números del
-fold 0 muestran **F1 ≈ 0.20–0.52** (muy por debajo tanto del ~0.86 de la
-Fase 2/3 como del ~0.75 estimado por la ablación de la sección 9) — pero es
-**solo un fold, aún en curso**; no se puede concluir nada definitivo hasta
-tener las 5 folds × 10 semillas completas y compararlas contra
-`results/phase4_final_top.json` (que todavía no existe). Vale la pena
-revisar el estado real de `results/orchestrator_phase4.jsonl` antes de citar
-estos números como finales.
+**Total: 27 + 138 + 690 = 855 corridas.** El plan viejo de 6 fases (5
+semillas, sweep completo de hiperparámetros, k-fold normal, fase 6
+identity-free separada) y sus ~2 480 registros de corrida están en
+`results_old_3/`.
 
 ---
 

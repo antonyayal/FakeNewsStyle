@@ -6,7 +6,7 @@ corpus PKLs (data/01_corpus_pkl/*.pkl, produced by --prepare_corpus) and
 repartitions them into N folds such that no news outlet (the `Source`
 column) appears in more than one of a fold's train/val/test splits. Used by
 main.py's --corpus_mode source_disjoint (see main.py's module docstring) and
-by scripts/orchestrator_phase4.py.
+by scripts/orchestrator_phase3.py.
 
 Goal
 ----

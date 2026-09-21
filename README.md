@@ -195,20 +195,21 @@ python main.py --corpus_mode source_disjoint --source_split_n 5 --source_split_i
 
 * **`original`** (default) uses the fixed split produced once by `--prepare_corpus`. One split, one train/test pair — this is what almost every experiment in `results/` uses.
 * **`kfold`** pools train+development+test and repartitions them into `--kfold_n` (default 5) label-stratified folds (**not** source-disjoint — see "Known Limitations & Caveats" below), cached under `data/01_corpus_pkl_cv/seed{S}_n{N}/fold{k}/`. `--kfold_index` picks which of those folds this invocation trains/evaluates on. It's used to check whether a config's result holds up across different data partitions, not to fix the source-leakage issue — that's still present in every fold. Kfold mode routes every downstream stage's output to a parallel `*_cv` tree, so it never collides with the original split's artifacts. See `main.py`'s module docstring and `src/data/kfold_corpus.py` for the full mechanics.
-* **`source_disjoint`** pools the same way, but repartitions into `--source_split_n` (default 5) folds such that no `Source` (news outlet) value ever appears in more than one of a fold's train/val/test (`StratifiedGroupKFold` + `GroupShuffleSplit` grouped by `Source`), cached under `data/01_corpus_pkl_source_cv/seed{S}_n{N}/fold{k}/`. `--source_split_index` picks the fold. This is the direct fix for the leakage `kfold` does not address — see "Known Limitations & Caveats" below and `src/data/source_split_corpus.py`. Outlet group sizes in this corpus are highly uneven, so split sizes/label balance won't match the clean ~70/30 of `original`/`kfold`; that's the accepted cost of removing the leakage at its source. Driven by `scripts/orchestrator_phase5.py` (Phase 5) — `kfold` mode is driven by `scripts/orchestrator_phase4.py` (Phase 4) instead.
+* **`source_disjoint`** pools the same way, but repartitions into `--source_split_n` (default 5) folds such that no `Source` (news outlet) value ever appears in more than one of a fold's train/val/test (`StratifiedGroupKFold` + `GroupShuffleSplit` grouped by `Source`), cached under `data/01_corpus_pkl_source_cv/seed{S}_n{N}/fold{k}/`. `--source_split_index` picks the fold. This is the direct fix for the leakage `kfold` does not address — see "Known Limitations & Caveats" below and `src/data/source_split_corpus.py`. Outlet group sizes in this corpus are highly uneven, so split sizes/label balance won't match the clean ~70/30 of `original`; that's the accepted cost of removing the leakage at its source. Driven by `scripts/orchestrator_phase3.py` (Phase 3 of the current plan).
 
 ---
 
-### 🔹 Experiment orchestration (Phase 1–6)
+### 🔹 Experiment orchestration (3-phase plan)
 
-`scripts/orchestrator_phase{1..6}.py` drive `main.py` through a search over extractor combinations and hyperparameters, with checkpointing/resume and centralized JSON-lines logging (`results/orchestrator_phase{1..6}.jsonl`). Every phase uses the same 5 fixed seeds (`scripts/experiment_config.SEEDS`) for paired comparisons across configs. Full CLI usage (dry-run, resume, output schemas) is in `scripts/README_experiments.md`.
+`scripts/orchestrator_phase{1,2,3}.py` drive `main.py` through the evaluation, with checkpointing/resume and centralized JSON-lines logging (`results/orchestrator_phase{1,2,3}.jsonl`). Every phase uses the same 3 fixed seeds (`scripts/experiment_config.SEEDS`) for paired comparisons. Full CLI usage (dry-run, resume, output schemas) is in `scripts/README_experiments.md`.
 
-1. **Phase 1 — latent dimension per extractor, in isolation.** Each of the 4 branches (semantic/emotion/style/context) runs alone (the other 3 `--exclude_*`), sweeping only its own latent dimension. Ranks *dimensions within the same branch* (a single-extractor model isn't expected to compete with a combo — that's Phase 2's job) to fix each branch's best-2 dimensions before any combination is tried. → `results/phase1_top.json`.
-2. **Phase 2 — extractor combinations.** The 15 non-empty subsets of {semantic, emotion, style, context}, each active branch at its Phase 1 rank-1 dimension (the top-2 aren't crossed). **All 15 combos pass through, ranked but not filtered** — Phase 1 already selected the best dimension per branch, so no second selection happens here on top of it; filtering by combo *before* Phase 3's hyperparameter sweep would let a combo that's mediocre under default hyperparameters get discarded before it had a fair shot at a better setting. → `results/phase2_top.json` (15 fully-resolved extractor+dimension configs).
-3. **Phase 3 — VAE regularization + KAN hyperparameters, fused.** For all 15 of Phase 2's configs, a one-knob-at-a-time sweep (18 variants: a shared baseline plus one candidate per non-default `vae_beta`, `vae_dropout`, `kan_num_basis`, `kan_hidden_dim`, `kan_weight_decay`, plus one combined variant) = 15 × 18 × 5 seeds = 1350 runs → **the best variant per combo** gets selected (never a flat top-N across combos — that let a single dominant combo occupy every slot, e.g. every Phase 3 winner being some variant of "`context` alone" while the leaky context branch dominated). All 15 combos, each fully resolved with its own best hyperparameters, advance to Phase 4/5. `kan_lr`/`kan_batch_size` aren't swept — a prior sweep found the default wins both. → `results/phase3_top.json`.
-4. **Phase 4 — robustness to partition.** All 15 of Phase 3's combos revalidated across 5 stratified k-folds (`--corpus_mode kfold`, 15 × 5 folds × 5 seeds = 375 runs) — checks whether performance holds up across different train/val/test row partitions, on top of the seed-to-seed variance already measured. Explores nothing new, and doesn't collapse to one winner: all 15 combos' results are ranked and kept. → `results/phase4_per_fold.json` + `results/phase4_top.json`.
-5. **Phase 5 — robustness to leakage by outlet.** The *same* 15 combos from Phase 3 (an independent branch, not chained after Phase 4) revalidated across 5 source-disjoint folds (`--corpus_mode source_disjoint`, 375 runs) — the definitive test of the Source/Domain leakage described in "Known Limitations & Caveats" below. Same as Phase 4: all 15 combos' results ranked, no single collapsed winner. → `results/phase5_per_fold.json` + `results/phase5_top.json`.
-6. **Phase 6 — identity-free context control.** A sibling of Phase 2, not a continuation of Phase 5 — it only depends on Phase 1's semantic/emotion/style dimensions, so it can run any time, interleaved with Phase 1–5. Re-runs the *same* Phase 1→5 protocol with `context`'s `Source`/`Domain` hash embeddings switched off (`--context_source_dim 0 --context_domain_dim 0`, only Topic+age+flags left) to separate genuine contextual signal from outlet memorization, in 5 stages selectable via `--stage {ab,c,d,e,all}`, following the same "never filter out a combo before it gets its turn" principle as Phases 2–5: **A/B** = Phase 1/2 equivalent (context-alone dim sweep, then all 15 combos, unfiltered), **C** = Phase 3 equivalent (best hyperparameter variant per combo, all 15 advance), **D/E** = Phase 4/5 equivalent (kfold / source-disjoint validation of all 15, ranked not collapsed) — guarded to refuse running for real until the actual Phase 4/5 has *finished* (not just started), since both share the same per-fold cache and running concurrently would corrupt it. Fully isolated from the shared cache Phase 1–5 read (own `*_phase6` data/model paths via `main.py --context_output_dir`/`--context_vae_input_dir`). Built and dry-run-verified; not yet executed for real — see "Known Limitations & Caveats" below. → `results/phase6_top.json`, `results/phase6_stageC_top.json`, `results/phase6_stageD_top.json`, `results/phase6_stageE_top.json`.
+VAE and KAN hyperparameters are **fixed** (`experiment_config.FINAL_HPARAMS`) — an earlier 1350-run one-knob-at-a-time sweep (`results_old_3/orchestrator_phase3.jsonl`) found no setting that beat `main.py`'s defaults by more than seed noise; only `vae_beta=4.0` clearly hurt. The lone exception is `kan_hidden_dim` (32 vs 64 was a coin flip), kept as the single swept axis (`HIDDEN_DIM_GRID`).
+
+1. **Phase 1 — `context` latent dimension, per identity mode.** Only the `context` branch is swept (the other three use `main.py`'s default dims). Two sub-sweeps of `context` alone: identity **ON** (`Source`/`Domain` hash embeddings on, dims `[8,16,32,64,86]`) and identity **OFF** (`--context_source_dim 0 --context_domain_dim 0`, dims `[4,8,16,23]`). (5+4) × 3 seeds = **27 runs**. Ranks dims *within each mode*. → `results/phase1_top.json`.
+2. **Phase 2 — standard-split evaluation.** All 15 non-empty extractor combos; the 8 that include `context` run twice (identity ON / OFF); each of those 23 combo-variants at both `kan_hidden_dim` values; × 3 seeds = **138 runs** on the fixed train/val/test split. Nothing is filtered. → `results/phase2_top.json` (23 combo-variants ranked by validation F1, test metrics alongside).
+3. **Phase 3 — source-disjoint validation.** The same 23 combo-variants × 2 `hidden_dim` × 3 seeds × 5 source-disjoint folds (`--corpus_mode source_disjoint`) = **690 runs** — the definitive test of the Source/Domain leakage in "Known Limitations & Caveats" below. The Phase 2 vs Phase 3 contrast quantifies how much of the standard-split F1 was outlet memorization. → `results/phase3_per_fold.json` + `results/phase3_top.json` (23 ranked, no single collapsed winner).
+
+**Total: 27 + 138 + 690 = 855 KAN runs.**
 
 #### Suggested: run the whole plan overnight
 
@@ -217,19 +218,16 @@ source venv/bin/activate
 nohup bash -c '
   python scripts/orchestrator_phase1.py --run &&
   python scripts/orchestrator_phase2.py --run &&
-  python scripts/orchestrator_phase3.py --run &&
-  python scripts/orchestrator_phase4.py --run &&
-  python scripts/orchestrator_phase5.py --run &&
-  python scripts/orchestrator_phase6.py --run
+  python scripts/orchestrator_phase3.py --run
 ' > logs/overnight_run.out 2>&1 &
 disown
 ```
 
 `&&`-chained so a failure anywhere stops the rest rather than silently continuing on bad input; each step is resumable on its own (re-running the same `--run` skips whatever already succeeded). `nohup ... & disown` keeps it alive after the SSH session ends — check progress with `tail -f logs/overnight_run.out`.
 
-Two things worth knowing before relying on this exact command:
-- **Phase 6 here only runs Stage A/B** — `--stage` defaults to `ab`, so this does Phase 6's dimension sweep + 15-combo ranking but not Stage C's hyperparameter tuning or Stage D/E's fold validation. Run those explicitly afterward (`--stage c`, then `--stage d` / `--stage e`) once you want the full identity-free cascade — Stage D/E's safety check (see above) requires Phase 4/5 to have already finished, which this chain guarantees.
-- **Fastest to try it once, in `--dry-run`, before committing to the real thing** — swap any `--run` for `--run --dry-run` to see the exact plan (commands, run counts) without training anything.
+**Fastest to try it once, in `--dry-run`, before committing to the real thing** — swap any `--run` for `--run --dry-run` to see the exact plan (commands, run counts) without training anything.
+
+> The previous 6-phase plan (5 seeds, a full VAE/KAN hyperparameter sweep, a normal k-fold phase, a separate identity-free `context` phase) and its ~2480 run records were moved to `results_old_3/` when the plan was cut down. See that dir and git history for the old orchestrators.
 
 ```bash
 python main.py --extract_semantic
@@ -362,39 +360,25 @@ doesn't by itself rule out other explanations for the gap.
 
 **Update (2026-09-02/03) — suggestive, not yet conclusive.** A
 source-disjoint re-split (no outlet appearing in both train and test,
-`--corpus_mode source_disjoint` / `src/data/source_split_corpus.py`,
-Phase 5) is the complementary check that isolates the *split* instead of
-the feature, and it has now run once, end to end, against a completed
-Phase 3: test F1 for the 5 winning configs dropped to roughly **0.30–0.53**
-across folds and seeds — well below even the identity-free ceiling above.
-This is consistent with the leakage hypothesis, but two things keep it from
-being read as a confirmed number yet:
+`--corpus_mode source_disjoint` / `src/data/source_split_corpus.py`) is the
+complementary check that isolates the *split* instead of the feature. An
+early run of it (against the old 6-phase plan, now in `results_old_3/`)
+showed test F1 for the winning configs dropping to roughly **0.30–0.53**
+across folds and seeds — well below even the identity-free ceiling above,
+consistent with the leakage hypothesis, but with two caveats: uneven
+outlet-group sizes make fold instability hard to separate from leakage, and
+that run predated a fix where the orchestrators selected each phase's
+winner by *test* F1 instead of *validation* F1 (overfitting winners to the
+test set via search).
 
-- The source-disjoint folds have highly uneven outlet-group sizes (see
-  `src/data/source_split_corpus.py`), so some of that collapse's variance
-  (a few fold/seed combinations landed near F1 ≈ 0) may reflect fold
-  instability or distribution shift rather than leakage specifically —
-  the two effects aren't yet separated.
-- A separate, unrelated bug was found and fixed the same day: Phase 1–5's
-  orchestrators (`scripts/experiment_runner.py`, `scripts/aggregate_results.py`)
-  were selecting each phase's "winning" config by *test* F1 instead of
-  *validation* F1, which overfits every reported winner to the test set via
-  search — independent of, and on top of, the Source/Domain leakage above.
-  The fix changes which configs Phase 3/4/5 even carry forward, so the
-  0.30–0.53 figure is from a run that predates it and needs to be
-  reproduced under the corrected criterion before it's citable as final.
-
-A new **Phase 6** (`scripts/orchestrator_phase6.py`) was added to close
-this out properly: it re-runs the full Phase 1→5 protocol with `context`'s
-Source/Domain embeddings switched off from the start (rather than as a
-one-off ablation), so extractor-combo selection, hyperparameter tuning, and
-fold validation all happen under identity-free `context` end to end. It has
-been built and dry-run-verified but not yet executed for real, so it has no
-results to report yet. Until both the val/test fix's re-run and Phase 6
-complete, treat the leakage's exact magnitude as **an open, actively
-investigated question — plausible and reasonably well-motivated, not an
-established fact** — and avoid citing the ≈0.90 full-pipeline F1 without
-this caveat.
+The current 3-phase plan folds both concerns in directly: Phase 3
+(`scripts/orchestrator_phase3.py`) runs every extractor combination across
+source-disjoint folds, with `context` tested both with and without
+`Source`/`Domain` (identity ON/OFF) end to end, and every phase selects on
+validation F1 only. Until Phase 2/3 have run under this plan, treat the
+leakage's exact magnitude as **an open, actively investigated question —
+plausible and reasonably well-motivated, not an established fact** — and
+avoid citing the ≈0.90 full-pipeline F1 without this caveat.
 
 ---
 

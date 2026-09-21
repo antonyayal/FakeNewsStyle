@@ -76,8 +76,8 @@ Corpus mode: original split vs. k-fold packages vs. source-disjoint packages
             --preprocess_text --extract_semantic --extract_emotion --extract_style --extract_context \\
             --run_vaes --merge_vae_latents --train_kan --kan_seed 42
 
-    See scripts/run_cv_packages.py (kfold) and scripts/orchestrator_phase4.py
-    (source_disjoint) for looping this over every fold x seed.
+    See scripts/orchestrator_phase3.py for looping source_disjoint over every
+    fold x seed x combo-variant.
 """
 # =====================================================
 # Imports
@@ -1179,6 +1179,10 @@ if args.train_kan:
         num_parameters=kan_result.get("num_parameters"),
         dataset_hash=dataset_hash,
         topic_breakdown=topic_breakdown,
+        context_dims={
+            "source": int(args.context_source_dim),
+            "domain": int(args.context_domain_dim),
+        },
         results_dir=Path(args.results_dir) if args.results_dir else None,
     )
 else:

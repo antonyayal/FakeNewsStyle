@@ -170,6 +170,9 @@ def flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "excluded_extractors": record.get("excluded_extractors", []),
         "combo": "+".join(record.get("active_extractors", [])) or "(none)",
         "latent_dims": record.get("latent_dims", {}),
+        # {source, domain} hash-embedding widths of the context branch; 0 = that
+        # identity field was switched off (Phase 6 control). None on older records.
+        "context_dims": record.get("context_dims"),
         "epochs": epochs,
         "vae_hyperparams": record.get("vae_hyperparams", {}),
         "kan_hyperparams": kan_hyperparams,
@@ -233,12 +236,19 @@ header.report-header .meta span { margin-right: 22px; }
 .badge-emotion  { background: #ffb454; }
 .badge-style    { background: #3ddc97; }
 .badge-context  { background: #d98cff; }
+.badge-on       { background: #3ddc97; }
+.badge-off      { background: #8a93a6; }
 .controls { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
 .controls input[type="text"] {
   background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
   padding: 7px 12px; border-radius: 6px; width: 320px; font-size: 0.9rem;
 }
 .controls label { color: var(--text-dim); font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
+.ctx-id-filter { flex-wrap: wrap; }
+.ctx-id-filter label { gap: 4px; color: var(--text); }
+.ctx-id-filter input[type="checkbox"], .f1-floor-filter input[type="checkbox"] { cursor: pointer; }
+.f1-floor-filter { color: var(--text); gap: 4px; }
+.ctrl-count { margin-left: auto; color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
 .controls input[type="number"] {
   background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
   padding: 6px 8px; border-radius: 6px; width: 70px; font-size: 0.85rem;
@@ -338,7 +348,8 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
 
 JS = """
 const DATA = JSON.parse(document.getElementById('report-data').textContent);
-const runs = DATA.runs;
+const allRuns = DATA.runs;            // everything in this report
+let runs = allRuns;                   // allRuns after the global Context S/D filter
 
 const DEGENERATE_EPS = 0.02;
 
@@ -354,6 +365,41 @@ function fmtNum(v, digits = 4) {
 function extractorBadges(list) {
   if (!list || !list.length) return '<span style="color:var(--text-dim)">(none)</span>';
   return list.map(m => `<span class="badge badge-${m}">${m}</span>`).join('');
+}
+
+// Whether the context branch's Source / Domain identity fields were on (dim > 0)
+// or off (dim = 0, the identity-free control of Phase 6). When the run record
+// doesn't carry context_dims, infer it: Phase 6 is the only protocol that
+// zeroes them, so a phase6 output path -> off, anything else -> the 32/32 CLI
+// default -> on. Inferred cells are marked with a trailing *.
+function contextIdentityBools(r) {
+  const cd = r.context_dims;
+  if (cd) {
+    return { source: Number(cd.source) > 0, domain: Number(cd.domain) > 0,
+             srcDim: cd.source, domDim: cd.domain, assumed: false };
+  }
+  const kanDir = (r.paths || {}).kan_output_dir || '';
+  const isPhase6 = /(^|[/_])phase6([/_]|$)/.test(kanDir);
+  return { source: !isPhase6, domain: !isPhase6, srcDim: null, domDim: null, assumed: true };
+}
+function contextIdentityRank(r) {
+  if (!r.active_extractors || !r.active_extractors.includes('context')) return -2;
+  const s = contextIdentityBools(r);
+  return (s.source ? 2 : 0) + (s.domain ? 1 : 0);
+}
+function contextIdentityCell(r) {
+  if (!r.active_extractors || !r.active_extractors.includes('context')) {
+    return '<span style="color:var(--text-dim)">context off</span>';
+  }
+  const s = contextIdentityBools(r);
+  const chip = (name, on, dim) => {
+    const suffix = (on && dim != null) ? ` (${dim})` : '';
+    return `<span class="badge ${on ? 'badge-on' : 'badge-off'}">${name} ${on ? 'on' : 'off'}${suffix}</span>`;
+  };
+  const star = s.assumed
+    ? ' <span style="color:var(--text-dim)" title="not recorded in this run — inferred from the run path (Phase 6 → off) or the 32/32 CLI default (→ on)">*</span>'
+    : '';
+  return chip('Source', s.source, s.srcDim) + ' ' + chip('Domain', s.domain, s.domDim) + star;
 }
 
 // train_accuracy - test_accuracy; null if either metric is missing (older records).
@@ -447,6 +493,8 @@ const TABLE_COLUMNS = [
     tip: 'Date and time this run finished training.' },
   { key: 'combo', label: 'Active extractors', sort: (r) => r.combo,
     tip: 'Which feature branches (semantic / emotion / style / context) fed the KAN in this run.' },
+  { key: 'context_identity', label: 'Context Source/Domain', sort: contextIdentityRank,
+    tip: 'Whether the context branch kept its Source and Domain hash-embedding fields on (--context_source_dim / --context_domain_dim > 0, the 32/32 default) or off (=0), the identity-free Phase 6 control that isolates outlet leakage. "context off" = the branch was not used. A trailing * means the record predates this field and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.' },
   { key: 'epochs', label: 'KAN epochs (run/requested)', sort: (r) => r.epochs.kan_epochs_run,
     tip: 'Epochs the KAN actually ran vs. the ones requested. If they differ, early stopping kicked in.' },
   { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
@@ -469,6 +517,37 @@ const TABLE_COLUMNS = [
 
 let sortState = { key: 'timestamp', asc: true };
 let filterText = '';
+// Which context Source/Domain identity states to show. Global: drives the
+// summary table AND every chart (renderAll works off `runs`, recomputed from
+// `allRuns` by recomputeRuns()).
+let ctxIdentityShow = { on: true, off: true, na: true };
+// Global "only strong runs" toggle: keep runs whose test F1 clears 0.6.
+let f1FloorOn = false;
+const F1_FLOOR = 0.6;
+
+function ctxIdentityOk(r) {
+  if (ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na) return true;
+  const rank = contextIdentityRank(r);
+  if (rank === -2) return ctxIdentityShow.na;   // context branch not used
+  if (rank === 0) return ctxIdentityShow.off;   // Source and Domain both off
+  return ctxIdentityShow.on;                    // Source and/or Domain on
+}
+function f1FloorOk(r) {
+  return !f1FloorOn || (typeof r.test_f1 === 'number' && r.test_f1 > F1_FLOOR);
+}
+function recomputeRuns() {
+  runs = allRuns.filter(r => ctxIdentityOk(r) && f1FloorOk(r));
+}
+
+// Live count shown to the right of the filter controls: how many run records
+// are currently visualized after the global filters.
+function updateControlCount() {
+  const el = document.getElementById('ctrl-count');
+  if (!el) return;
+  el.textContent = runs.length === allRuns.length
+    ? `Showing ${allRuns.length} run(s)`
+    : `Showing ${runs.length} / ${allRuns.length} run(s)`;
+}
 
 function filteredSortedRuns() {
   let rows = runs;
@@ -528,6 +607,7 @@ function renderTable() {
       <td><code>${r.run_id}</code>${degenerateTag}</td>
       <td>${fmtTs(r.timestamp)}</td>
       <td>${extractorBadges(r.active_extractors)}</td>
+      <td>${contextIdentityCell(r)}</td>
       <td>${epochCell}</td>
       <td>${fmtNum(r.test_accuracy)}</td>
       <td>${gapCell}</td>
@@ -540,6 +620,20 @@ function renderTable() {
     </tr>`;
   }).join('');
 }
+
+document.querySelectorAll('.ctx-id-chk').forEach(chk => {
+  chk.addEventListener('change', () => {
+    ctxIdentityShow[chk.value] = chk.checked;
+    recomputeRuns();
+    renderAll();
+  });
+});
+
+document.getElementById('f1-floor-chk').addEventListener('change', (e) => {
+  f1FloorOn = e.target.checked;
+  recomputeRuns();
+  renderAll();
+});
 
 document.getElementById('table-filter').addEventListener('input', (e) => {
   filterText = e.target.value;
@@ -567,40 +661,57 @@ function renderBarChart() {
   }, { responsive: true, displaylogo: false });
 }
 
-// ---------- c) Heatmap: extractor combo vs test metrics (mean±std when a combo has >1 run) ----------
-function renderHeatmap() {
+// ---------- c) Heatmaps: extractor combo vs test metrics (max, then mean±std) ----------
+// `agg` is 'mean' or 'max'; both charts share layout, differ only in how per-combo
+// runs are aggregated. Cell hover always shows the run count for that combination.
+function renderComboHeatmap(divId, agg) {
   const metrics = ['test_accuracy', 'test_f1', 'test_roc_auc', 'test_log_loss'];
   const metricLabels = ['accuracy', 'f1', 'roc_auc', 'log_loss'];
+  const isMax = agg === 'max';
+  const aggName = isMax ? 'max' : 'mean';
   const byCombo = {};
   runs.forEach(r => {
     if (!byCombo[r.combo]) byCombo[r.combo] = [];
     byCombo[r.combo].push(r);
   });
+  const valsFor = (combo, m) => byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
+  const aggregate = (vals) => isMax ? Math.max(...vals) : mean(vals);
   const combos = Object.keys(byCombo).sort((a, b) => {
-    const meanA = byCombo[a].reduce((s, r) => s + (r.test_f1 || 0), 0) / byCombo[a].length;
-    const meanB = byCombo[b].reduce((s, r) => s + (r.test_f1 || 0), 0) / byCombo[b].length;
-    return meanA - meanB;
+    const va = valsFor(a, 'test_f1'), vb = valsFor(b, 'test_f1');
+    return (va.length ? aggregate(va) : 0) - (vb.length ? aggregate(vb) : 0);
   });
   const z = combos.map(combo => metrics.map(m => {
-    const vals = byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
-    return vals.length ? mean(vals) : null;
+    const vals = valsFor(combo, m);
+    return vals.length ? aggregate(vals) : null;
   }));
   const text = combos.map(combo => metrics.map(m => {
-    const vals = byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
+    const vals = valsFor(combo, m);
     if (!vals.length) return '';
+    if (isMax) return Math.max(...vals).toFixed(3);
     const m_ = mean(vals);
     return vals.length > 1 ? `${m_.toFixed(3)}±${std(vals, m_).toFixed(3)}` : m_.toFixed(3);
   }));
+  // one run-count per row, broadcast across the metric columns for the cell hover
+  const customdata = combos.map(combo => metricLabels.map(() => byCombo[combo].length));
 
-  Plotly.newPlot('heatmap-chart', [{
-    z, x: metricLabels, y: combos, type: 'heatmap', colorscale: 'Viridis',
-    text, texttemplate: '%{text}', hovertemplate: '%{y} · %{x}: %{z:.4f}<extra></extra>',
+  Plotly.newPlot(divId, [{
+    z, x: metricLabels, y: combos, customdata, type: 'heatmap', colorscale: 'Viridis',
+    zmin: 0, zmax: 1,  // colour scale is always pinned to [0, 1]
+    text, texttemplate: '%{text}',
+    hovertemplate: '%{y} · %{x}: %{z:.4f}<br>%{customdata} run(s)<extra></extra>',
   }], {
-    title: 'Extractor combinations vs. test metrics (mean±std if there are multiple runs)',
+    title: isMax
+      ? 'Extractor combinations vs. test metrics (max across runs)'
+      : 'Extractor combinations vs. test metrics (mean; mean±std if there are multiple runs)',
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { color: '#e6e9f2' },
     margin: { t: 40, l: 220 },
   }, { responsive: true, displaylogo: false });
+}
+
+function renderHeatmap() {
+  renderComboHeatmap('heatmap-chart-max', 'max');
+  renderComboHeatmap('heatmap-chart', 'mean');
 }
 
 // ---------- Seed stability: runs sharing combo + hyperparams (excl. seed), differing only by seed ----------
@@ -722,7 +833,8 @@ function renderCards() {
             seed: ${r.seed ?? '—'} &nbsp;·&nbsp;
             train time: ${r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) + 's' : '—'} &nbsp;·&nbsp;
             # parameters: ${r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—'}<br>
-            latent dims: ${Object.entries(r.latent_dims || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}
+            latent dims: ${Object.entries(r.latent_dims || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}<br>
+            context Source/Domain: ${contextIdentityCell(r)}
           </p>
         </div>
         <div class="hparams-cols">
@@ -743,15 +855,19 @@ function renderCards() {
   }).join('') || '<p class="empty-msg">No runs to show.</p>';
 }
 
-renderNarrative();
-renderTable();
-if (runs.length) {
-  renderBarChart();
-  renderHeatmap();
-  renderSeedStability();
-  renderCalibrationScatters();
+function renderAll() {
+  updateControlCount();
+  renderNarrative();
+  renderTable();
+  if (runs.length) {
+    renderBarChart();
+    renderHeatmap();
+    renderSeedStability();
+    renderCalibrationScatters();
+  }
+  renderCards();
 }
-renderCards();
+renderAll();
 """
 
 
@@ -798,6 +914,13 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
   <div class="controls">
     <input type="text" id="table-filter" placeholder="Filter by run_id, extractors, or batch...">
     <label>Gap (train-test) alert threshold: <input type="number" id="gap-threshold" value="0.15" step="0.01" min="0" max="1"></label>
+    <label class="ctx-id-filter">Context S/D:
+      <label><input type="checkbox" class="ctx-id-chk" value="on" checked> identity on</label>
+      <label><input type="checkbox" class="ctx-id-chk" value="off" checked> identity off</label>
+      <label><input type="checkbox" class="ctx-id-chk" value="na" checked> context not used</label>
+    </label>
+    <label class="f1-floor-filter"><input type="checkbox" id="f1-floor-chk"> Test F1 &gt; 0.6 only</label>
+    <span id="ctrl-count" class="ctrl-count"></span>
   </div>
   <div style="overflow-x:auto;">
     <table class="summary">
@@ -814,6 +937,7 @@ def render_html(records: List[Dict[str, Any]], scope_kind: str, scope_desc: str,
 
 <section id="charts-b">
   <h2>Extractor combinations vs. test metrics</h2>
+  <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart-max" style="height:460px;"></div></div></div>
   <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart" style="height:460px;"></div></div></div>
   <div id="seed-stability-section" class="section-block seed-stability-table" style="display:none;">
     <h4>Stability across seeds (same combo + hyperparameters, different seed)</h4>

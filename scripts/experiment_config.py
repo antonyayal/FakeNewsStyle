@@ -1,10 +1,30 @@
 # scripts/experiment_config.py
 # -*- coding: utf-8 -*-
 """
-Shared module for the experiment orchestrators (Phase 1 through Phase 5):
-fixed seeds, per-hyperparameter candidate values, and result paths.
-Edit this file's constants to adjust the sweep scope without touching
-orchestrator_phase{1..5}.py's logic.
+Shared config for the 3-phase experiment plan (Option A):
+
+  Phase 1  -- context VAE latent dimension, swept for both identity modes
+              (Source/Domain hash embeddings ON vs. OFF). The other three
+              branches are NOT swept; they use main.py's default dims, since
+              an earlier full per-branch sweep showed the latent size barely
+              moves F1 within a branch.
+  Phase 2  -- standard-split evaluation. All 15 non-empty extractor combos;
+              every combo that includes `context` is run twice (identity ON
+              and OFF); every combo-variant at both KAN hidden_dim values;
+              x SEEDS. Nothing is filtered.
+  Phase 3  -- source-disjoint validation (no news outlet in more than one of
+              a fold's train/val/test). Same 23 combo-variants x hidden_dim x
+              SEEDS x folds. The contrast Phase 2 vs Phase 3 quantifies how
+              much of the F1 was outlet memorization.
+
+VAE and KAN hyperparameters are FIXED (see FINAL_HPARAMS) -- picked from the
+old Phase 3 one-knob sweep, where no setting beat main.py's defaults by more
+than seed noise (only `vae_beta=4.0` clearly hurt). `kan_hidden_dim` is the
+one exception: 32 vs 64 was a coin flip in that data, so both are kept as
+the single swept axis.
+
+Edit the constants here to change the sweep scope without touching the
+orchestrators.
 """
 
 from __future__ import annotations
@@ -13,188 +33,106 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ---- Fixed seeds ------------------------------------------------------------
-# Same set for every configuration, to allow paired comparisons
-# (Wilcoxon signed-rank) between configurations.
-SEEDS = [1, 7, 42, 123, 2024]
+# ---- Fixed seeds ----------------------------------------------------------
+# Same set for every configuration, for paired comparisons (Wilcoxon
+# signed-rank) between configs. Trimmed from 5 to 3 -- within-config seed
+# std on this task is ~0.016 F1, so 3 seeds already pin the mean tightly.
+SEEDS = [1, 7, 42]
 
-# ---- Experts / modalities ---------------------------------------------------
+# ---- Experts / modalities -----------------------------------------------
 ALL_MODALITIES = ["semantic", "emotion", "style", "context"]
 
-# main.py's default latent dimensions (must match its argparse defaults:
-# --semantic_latent_dim, --emotion_latent_dim, etc.) -- used as the fallback
-# for branches that are excluded from a given run (main.py still wants a
-# value for every --{branch}_latent_dim flag even when --exclude_{branch}
-# is also passed).
+# main.py's default latent dimensions (must match its argparse defaults).
+# The non-context branches use these verbatim in every phase; only `context`
+# gets a swept dimension (Phase 1).
 DEFAULT_LATENT_DIM = {"semantic": 128, "emotion": 16, "style": 16, "context": 64}
 
-# ---- Phase 1: latent dimension per branch, in isolation ---------------------
-# One extractor active at a time -- capped at each branch's raw feature
-# dimension (no point asking a VAE to expand instead of compress):
-# semantic 1024 (xlm-roberta-large hidden_size), emotion 23 (7 emo_probs +
-# 3 sent_probs + 13 signals), style 35, context 86 (32 source + 32 domain +
-# 16 topic + 0 author + 1 age + 5 has_* flags, main.py's defaults).
-PHASE1_DIM_CANDIDATES = {
-    "semantic": [64, 128, 256, 512, 1024],
-    "emotion": [8, 16, 23],
-    "style": [8, 16, 32, 35],
-    "context": [8, 16, 32, 64, 86],
-}
-PHASE1_TOP_K = 2  # kept per branch
-
-# ---- Phase 3: VAE-reg + KAN hyperparameters, fused, one knob at a time ------
-# main.py's own defaults, used as the shared baseline every candidate below
-# overrides exactly one field of.
-PHASE3_BASELINE = {
+# ---- Fixed VAE + KAN hyperparameters -----------------------------------
+# Everything except kan_hidden_dim. Sourced from the old Phase 3 sweep
+# (results/orchestrator_phase3.jsonl): marginal effect of each knob was
+# below seed noise, so these are main.py's defaults.
+FINAL_HPARAMS = {
     "vae_beta": 1.0,
     "vae_dropout": 0.1,
     "kan_num_basis": 16,
-    "kan_hidden_dim": 64,
-    "kan_weight_decay": 1e-4,
-}
-PHASE3_CANDIDATES = {
-    "default": {},
-    "beta_01": {"vae_beta": 0.1},
-    "beta_025": {"vae_beta": 0.25},
-    "beta_05": {"vae_beta": 0.5},
-    "beta_4": {"vae_beta": 4.0},
-    "dropout_0": {"vae_dropout": 0.0},
-    "dropout_02": {"vae_dropout": 0.2},
-    "dropout_03": {"vae_dropout": 0.3},
-    "basis_4": {"kan_num_basis": 4},
-    "basis_8": {"kan_num_basis": 8},
-    "basis_32": {"kan_num_basis": 32},
-    "hidden_8": {"kan_hidden_dim": 8},
-    "hidden_16": {"kan_hidden_dim": 16},
-    "hidden_32": {"kan_hidden_dim": 32},
-    "hidden_128": {"kan_hidden_dim": 128},
-    "wd_low": {"kan_weight_decay": 1e-5},
-    "wd_high": {"kan_weight_decay": 1e-3},
-    # Combined variant (not one-knob-at-a-time): num_basis + hidden_dim both
-    # lowered together with weight_decay raised, checked manually against
-    # results/ on 2026-09-02 and found nowhere in the existing sweep.
-    "combo_basis8_hidden16_wdhigh": {
-        "kan_num_basis": 8,
-        "kan_hidden_dim": 16,
-        "kan_weight_decay": 1e-3,
-    },
-}
-
-# kan_lr / kan_batch_size are never swept -- a prior sweep already found the
-# default wins for both, so they stay fixed everywhere via FIXED_KAN_BASELINE.
-FIXED_KAN_BASELINE = {
     "kan_dropout": 0.2,
+    "kan_weight_decay": 1e-4,
     "kan_epochs": 100,
     "kan_patience": 15,
     "kan_batch_size": 32,
     "kan_lr": 1e-3,
 }
 
-# ---- Result paths -----------------------------------------------------------
+# The one swept hyperparameter -- 32 vs 64 was within noise in the old
+# sweep, so both are carried through every phase.
+HIDDEN_DIM_GRID = [32, 64]
+
+# ---- Phase 1: context latent dimension, per identity mode --------------
+# identity ON  -> full context raw dim 86 (32 source + 32 domain + 16 topic
+#                 + 0 author + 1 age + 5 flags), main.py's context defaults.
+# identity OFF -> --context_source_dim 0 --context_domain_dim 0, raw dim
+#                 shrinks to 23 (16 topic + 1 age + 6 flags).
+PHASE1_CONTEXT_ON_DIMS = [8, 16, 32, 64, 86]
+PHASE1_CONTEXT_OFF_DIMS = [4, 8, 16, 23]
+PHASE1_TOP_K = 2  # kept per identity mode in phase1_top.json
+
+# Fallbacks if Phase 1 hasn't run: main.py's default for ON, a mid value
+# for OFF (capped at the identity-free raw dim of 23).
+FALLBACK_CONTEXT_ON_DIM = DEFAULT_LATENT_DIM["context"]
+FALLBACK_CONTEXT_OFF_DIM = 16
+
+# ---- Identity-free context (Source/Domain switched off) ---------------
+CONTEXT_IDFREE_SOURCE_DIM = 0
+CONTEXT_IDFREE_DOMAIN_DIM = 0
+
+# ---- Source-disjoint folds (Phase 3) ---------------------------------
+# Must match main.py's --source_split_n / --source_split_seed defaults so a
+# bare `python main.py --corpus_mode source_disjoint ...` addresses the same
+# cached folds.
+SOURCE_SPLIT_N_FOLDS = 5
+SOURCE_SPLIT_SEED = 20260821
+
+# ---- Ranking metric --------------------------------------------------
+RANKING_METRIC = "f1"
+
+# ---- Result paths --------------------------------------------------
 RESULTS_DIR = BASE_DIR / "results"
 PHASE1_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase1.jsonl"
 PHASE2_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase2.jsonl"
 PHASE3_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase3.jsonl"
-PHASE4_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase4.jsonl"
-PHASE5_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase5.jsonl"
 
 PHASE1_TOP_JSON = RESULTS_DIR / "phase1_top.json"
 PHASE2_TOP_JSON = RESULTS_DIR / "phase2_top.json"
+PHASE3_PER_FOLD_JSON = RESULTS_DIR / "phase3_per_fold.json"
 PHASE3_TOP_JSON = RESULTS_DIR / "phase3_top.json"
-PHASE4_PER_FOLD_JSON = RESULTS_DIR / "phase4_per_fold.json"
-PHASE4_TOP_JSON = RESULTS_DIR / "phase4_top.json"
-PHASE5_PER_FOLD_JSON = RESULTS_DIR / "phase5_per_fold.json"
-PHASE5_TOP_JSON = RESULTS_DIR / "phase5_top.json"
 
+# ---- Data / model paths --------------------------------------------
 KAN_RUNS_DIR = BASE_DIR / "data" / "07_kan_runs"
-VAE_LATENTS_DIR = BASE_DIR / "data" / "05_vae_latents"
+VAE_LATENTS_DIR = BASE_DIR / "data" / "05_vae_latents"          # shared default cache
 FEATURES_RAW_DIR = BASE_DIR / "data" / "03_features_raw"
 
-# Isolated directories for Phase 3's non-default (vae_beta, vae_dropout)
-# candidates -- must never collide with VAE_LATENTS_DIR / "models/vae" (the
-# default cache used by Phase 1/2/3's default-reg candidates), so training
-# with a beta/dropout other than default at the same latent dimension
-# doesn't overwrite it.
-PHASE3_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_phase3"
-PHASE3_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_phase3"
-PHASE3_VAE_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_phase3"
+# Phase 2's manually merged KAN inputs (one dir per prep unit).
+PHASE2_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_optA"
 
-# Metric used for ranking and for the Wilcoxon test.
-RANKING_METRIC = "f1"
+# Isolated identity-free context artifacts, standard split (Phase 1 & 2).
+IDFREE_CONTEXT_RAW_DIR = BASE_DIR / "data" / "03_features_raw_idfree" / "context"
+IDFREE_CONTEXT_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_idfree"
+IDFREE_CONTEXT_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_idfree"
 
-# ---- Phase 4: CV packages (kfold, NOT source-disjoint) ----------------------
-# Standard stratified k-fold over the pooled corpus (train+development+test).
-# PHASE4_N_FOLDS/PHASE4_SPLIT_SEED here must match main.py's --kfold_n/
-# --kfold_split_seed defaults so orchestrator_phase4.py and any bare
-# `python main.py --corpus_mode kfold ...` invocation address the exact same
-# cached folds.
-PHASE4_N_FOLDS = 5
-PHASE4_SPLIT_SEED = 20260820
-PHASE4_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase4"
-PHASE4_MERGED_CV_DIR = BASE_DIR / "data" / "06_vae_latents_merged_cv"
+# Source-disjoint per-fold caches (Phase 3).
+#   non-context branches (+ identity-ON context) -> main.py's shared
+#   source_cv cache, namespaced by fold by main.py itself:
+SOURCE_CV_RAW_DIR = BASE_DIR / "data" / "03_features_raw_source_cv"
+SOURCE_CV_VAE_DIR = BASE_DIR / "data" / "05_vae_latents_source_cv"
+#   identity-OFF context -> its own isolated per-fold tree:
+IDFREE_CONTEXT_FOLD_RAW_DIR = BASE_DIR / "data" / "03_features_raw_source_cv_idfree"
+IDFREE_CONTEXT_FOLD_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_source_cv_idfree"
+IDFREE_CONTEXT_FOLD_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_source_cv_idfree"
+#   Phase 3's manually merged KAN inputs, namespaced by fold + prep unit:
+PHASE3_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_source_cv_optA"
 
-# ---- Phase 5: source-disjoint packages ---------------------------------------
-# Same protocol as Phase 4 but partitioned so no Source (news outlet) appears
-# in more than one of a fold's train/val/test (StratifiedGroupKFold +
-# GroupShuffleSplit grouped by Source, see src/data/source_split_corpus.py).
-# PHASE5_N_FOLDS/PHASE5_SPLIT_SEED here must match main.py's --source_split_n/
-# --source_split_seed defaults.
-PHASE5_N_FOLDS = 5
-PHASE5_SPLIT_SEED = 20260821
-PHASE5_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase5"
-PHASE5_MERGED_CV_DIR = BASE_DIR / "data" / "06_vae_latents_merged_source_cv"
 
-# ---- Phase 6: identity-free context (Source/Domain leakage control) --------
-# Re-runs Phase 1 (context branch only) + Phase 2 (15 combos) with context's
-# Source/Domain hash embeddings switched off (--context_source_dim 0
-# --context_domain_dim 0, keeping only Topic+age+flags) -- see
-# dataset_source_label_leakage memory / README's "Known Limitations &
-# Caveats". Fully isolated from the shared default cache other phases read:
-# raw features, VAE, and merged latents all live under their own *_phase6
-# dirs (via main.py's --context_output_dir/--context_vae_input_dir and the
-# usual --vae_data_output_dir/--vae_model_output_dir/--merge_output_dir),
-# so Phase 6 can run interleaved with Phase 1-5 without touching them.
-PHASE6_CONTEXT_SOURCE_DIM = 0
-PHASE6_CONTEXT_DOMAIN_DIM = 0
-# Capped at the identity-free raw dim (topic16 + age1 + 6 flags = 23) --
-# main.py's defaults for context_topic_dim (16) and context_author_dim (0).
-PHASE6_CONTEXT_DIM_CANDIDATES = [4, 8, 16, 23]
-PHASE6_TOP_K = 2  # kept for context, mirrors PHASE1_TOP_K
-
-PHASE6_RAW_DIR = BASE_DIR / "data" / "03_features_raw_phase6"
-PHASE6_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_phase6"
-PHASE6_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_phase6"
-PHASE6_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_phase6"
-PHASE6_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6"
-
-PHASE6_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6.jsonl"
-PHASE6_CONTEXT_TOP_JSON = RESULTS_DIR / "phase6_context_top.json"
-PHASE6_TOP_JSON = RESULTS_DIR / "phase6_top.json"  # Stage B: 15-combo ranking
-
-# Stage C (Phase 3 equivalent: VAE-reg + KAN hyperparams on Stage B's top 5)
-PHASE6_STAGE_C_TOP_JSON = RESULTS_DIR / "phase6_stageC_top.json"
-
-# Stage D/E (Phase 4/5 equivalent: kfold / source-disjoint validation of
-# Stage C's top 5). Per-fold raw context + isolated VAE live under their own
-# *_phase6 subpaths (namespaced by corpus_mode so kfold and source_disjoint
-# never collide with each other); everything else (semantic/emotion/style)
-# reuses the SAME fold-aware shared cache Phase 4/5 already populate
-# (data/03_features_raw_cv, _source_cv, etc.) since only context is affected
-# by the leakage fix.
-PHASE6_STAGE_D_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6_stageD.jsonl"
-PHASE6_STAGE_D_PER_FOLD_JSON = RESULTS_DIR / "phase6_stageD_per_fold.json"
-PHASE6_STAGE_D_TOP_JSON = RESULTS_DIR / "phase6_stageD_top.json"
-PHASE6_STAGE_D_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6_stageD"
-PHASE6_STAGE_D_RAW_DIR = BASE_DIR / "data" / "03_features_raw_cv_phase6"
-PHASE6_STAGE_D_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_cv_phase6"
-PHASE6_STAGE_D_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_cv_phase6"
-PHASE6_STAGE_D_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_cv_phase6"
-
-PHASE6_STAGE_E_RESULTS_JSONL = RESULTS_DIR / "orchestrator_phase6_stageE.jsonl"
-PHASE6_STAGE_E_PER_FOLD_JSON = RESULTS_DIR / "phase6_stageE_per_fold.json"
-PHASE6_STAGE_E_TOP_JSON = RESULTS_DIR / "phase6_stageE_top.json"
-PHASE6_STAGE_E_KAN_RUNS_DIR = KAN_RUNS_DIR / "phase6_stageE"
-PHASE6_STAGE_E_RAW_DIR = BASE_DIR / "data" / "03_features_raw_source_cv_phase6"
-PHASE6_STAGE_E_VAE_DATA_DIR = BASE_DIR / "data" / "05_vae_latents_source_cv_phase6"
-PHASE6_STAGE_E_VAE_MODEL_DIR = BASE_DIR / "models" / "vae_source_cv_phase6"
-PHASE6_STAGE_E_MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_source_cv_phase6"
+def source_cv_fold_dir(base: Path, fold_idx: int) -> Path:
+    """main.py's fold namespacing for source_disjoint mode
+    (src/data/source_split_corpus.py's fold_dir): base/seed{S}_n{N}/fold{k}."""
+    return base / f"seed{SOURCE_SPLIT_SEED}_n{SOURCE_SPLIT_N_FOLDS}" / f"fold{fold_idx}"

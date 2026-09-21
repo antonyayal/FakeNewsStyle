@@ -73,6 +73,7 @@ def log_experiment_result(
     num_parameters: Optional[int] = None,
     dataset_hash: Optional[str] = None,
     topic_breakdown: Optional[Dict[str, Dict[str, Any]]] = None,
+    context_dims: Optional[Dict[str, int]] = None,
 ) -> Path:
     """
     Assembles one experiment record and writes it to results/{run_id}.json.
@@ -107,6 +108,11 @@ def log_experiment_result(
         "active_extractors": active_extractors,
         "excluded_extractors": excluded_extractors,
         "latent_dims": latent_dims,
+        # Hash-embedding widths of the context branch's identity fields. 0 means
+        # that field was switched off (the identity-free control run of Phase 6);
+        # the default is 32/32. None when the caller did not pass them (older
+        # records, or runs where context was excluded entirely).
+        "context_dims": context_dims,
         "epochs": {
             "vae_epochs_requested": vae_epochs_requested,
             "kan_epochs_requested": kan_epochs_requested,

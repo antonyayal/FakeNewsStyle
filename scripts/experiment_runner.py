@@ -1,14 +1,16 @@
 # scripts/experiment_runner.py
 # -*- coding: utf-8 -*-
 """
-Mechanics shared by orchestrator_phase{1..5}.py: launching main.py via
-subprocess, capturing the results/{run_id}.json that src/experiments/
-run_logger.py writes, appending a result line to the phase's centralized
-JSON-lines (with checkpointing/resume based on run_key), and building the
-VAE latents each phase's KAN runs read from -- either the shared default
-cache (ensure_vae_latents) or an isolated per-(beta, dropout) one merged
-manually (resolve_kan_input / merge_latents_manual), for candidates whose
-vae_beta/vae_dropout aren't main.py's defaults.
+Mechanics shared by orchestrator_phase{1,2,3}.py (and experiment_plan.py):
+launching main.py via subprocess, capturing the results/{run_id}.json that
+src/experiments/run_logger.py writes, appending a result line to the phase's
+centralized JSON-lines (with checkpointing/resume based on run_key), and
+building the VAE latents each phase's KAN runs read from -- the shared
+default cache (ensure_vae_latents) plus manual concatenation
+(merge_latents_manual). resolve_kan_input / is_default_vae_reg support an
+isolated per-(beta, dropout) cache; the current 3-phase plan fixes
+vae_beta/vae_dropout at main.py's defaults, so only identity-free `context`
+still needs an isolated cache (handled in experiment_plan.py).
 """
 
 from __future__ import annotations

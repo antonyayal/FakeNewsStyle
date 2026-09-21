@@ -47,6 +47,8 @@ header.report-header .meta span { margin-right: 22px; }
   padding: 8px 16px; border-radius: 6px; font-size: 0.88rem; cursor: pointer;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--border); color: var(--text); }
 .btn.primary { background: var(--accent); color: #ffffff; border-color: var(--accent); font-weight: 600; }
 .btn.primary:hover { opacity: 0.9; color: #ffffff; }
 
@@ -93,6 +95,14 @@ header.report-header .meta span { margin-right: 22px; }
 .badge-disjoint { background: linear-gradient(180deg, rgba(255,69,58,0.92), rgba(255,45,85,0.92)); }
 .controls { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
 .view-tabs { display: flex; gap: 6px; }
+.main-tabs { display: flex; gap: 8px; margin: 8px 0 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+.main-tabs .btn { font-size: 0.95rem; padding: 9px 18px; }
+#maintab-phases-count { margin-left: 6px; opacity: 0.85; font-weight: 400; }
+.phase-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 18px 0; }
+.phase-card h2 { margin: 0 0 4px; font-size: 1.05rem; }
+.phase-card .phase-meta { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 12px; }
+.phase-card .phase-note { color: var(--text-dim); font-size: 0.88rem; margin: 0 0 12px; }
+.phase-card table.summary { margin-top: 12px; }
 #summary .controls {
   position: sticky; top: var(--section-title-h, 44px); z-index: 15;
   background: var(--bg); padding: 12px 0; margin: 0 0 12px;
@@ -109,6 +119,11 @@ header.report-header .meta span { margin-right: 22px; }
   padding: 7px 12px; border-radius: 6px; width: 320px; font-size: 0.9rem;
 }
 .controls label { color: var(--text-dim); font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
+.ctx-id-filter { flex-wrap: wrap; }
+.ctx-id-filter label { gap: 4px; color: var(--text); }
+.ctx-id-filter input[type="checkbox"], .f1-floor-filter input[type="checkbox"] { cursor: pointer; }
+.f1-floor-filter { color: var(--text); gap: 4px; }
+.ctrl-count { margin-left: auto; color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
 .controls input[type="number"] {
   background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
   padding: 6px 8px; border-radius: 6px; width: 70px; font-size: 0.85rem;
@@ -179,6 +194,18 @@ tr.degenerate-row { background: rgba(255, 107, 107, 0.08); }
 .chart-grid.full { grid-template-columns: 1fr; }
 .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
 @media (max-width: 1000px) { .chart-grid { grid-template-columns: 1fr; } }
+.palette-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 16px; margin: 16px 0 8px; font-size: 0.85rem; color: var(--text-dim);
+}
+.palette-bar__label { font-weight: 600; color: var(--text); }
+.palette-bar label { display: flex; align-items: center; gap: 5px; }
+.palette-bar input[type="color"] {
+  width: 34px; height: 26px; padding: 0; border: 1px solid var(--border);
+  border-radius: 5px; background: none; cursor: pointer;
+}
+.palette-preview { width: 160px; height: 18px; border-radius: 4px; border: 1px solid var(--border); }
 footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align: center; }
 </style>
 </head>
@@ -220,6 +247,22 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
     <ul id="excluded-list-2"></ul>
   </div>
 
+  <div class="main-tabs">
+    <button class="btn primary" id="maintab-runs" type="button">Runs report</button>
+    <button class="btn" id="maintab-phases" type="button">Phase summaries<span id="maintab-phases-count"></span></button>
+  </div>
+
+<div id="view-runs">
+
+  <div class="palette-bar">
+    <span class="palette-bar__label">Heatmap / 0–1 colour scale</span>
+    <label>low <input type="color" id="palette-low"></label>
+    <label>mid <input type="color" id="palette-mid"></label>
+    <label>high <input type="color" id="palette-high"></label>
+    <span id="palette-preview" class="palette-preview"></span>
+    <button class="btn" id="palette-reset" type="button">Reset</button>
+  </div>
+
   <section class="narrative">
     <h3>Automatic summary</h3>
     <ul id="narrative-list"></ul>
@@ -233,6 +276,13 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
         <button class="btn" id="tab-metrics" type="button">Metrics</button>
       </div>
       <input type="text" id="table-filter" placeholder="Filter by run_id, extractors, or file...">
+      <label class="ctx-id-filter">Context S/D:
+        <label><input type="checkbox" class="ctx-id-chk" value="on" checked> identity on</label>
+        <label><input type="checkbox" class="ctx-id-chk" value="off" checked> identity off</label>
+        <label><input type="checkbox" class="ctx-id-chk" value="na" checked> context not used</label>
+      </label>
+      <label class="f1-floor-filter"><input type="checkbox" id="f1-floor-chk"> Test F1 &gt; 0.6 only</label>
+      <span id="ctrl-count" class="ctrl-count"></span>
     </div>
     <div class="table-scroll">
       <table class="summary">
@@ -248,7 +298,8 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="charts-b">
-    <h2 data-tooltip="Heatmap: rows = extractor combinations, columns = accuracy / F1 / ROC-AUC / log-loss on test, cell = mean over that combination’s runs (±sd shown as text). Rows sorted by mean F1.">Extractor combinations vs. test metrics</h2>
+    <h2 data-tooltip="Two heatmaps: rows = extractor combinations, columns = accuracy / F1 / ROC-AUC / log-loss on test. Top = max over that combination’s runs (rows sorted by max F1). Bottom = mean over the runs (±sd shown as text, rows sorted by mean F1). Cell hover shows the run count for that combination.">Extractor combinations vs. test metrics</h2>
+    <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart-max" style="height:460px;"></div></div></div>
     <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart" style="height:460px;"></div></div></div>
   </section>
 
@@ -261,7 +312,7 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="charts-d">
-    <h2 data-tooltip="3D scatter, one point per run. x = running count of that combination’s runs, y = extractor combination, z = total VAE latent size (log). Color = test F1 on a 0–1 Blues scale.">Combination × repetitions × VAE latent size (color = test F1)</h2>
+    <h2 data-tooltip="3D scatter, one point per run. x = running count of that combination’s runs, y = extractor combination, z = total VAE latent size (log). Color = test F1 on a 0–1 colour scale (set in the header).">Combination × repetitions × VAE latent size (color = test F1)</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="combo-3d-scatter" style="height:620px;"></div></div></div>
   </section>
 
@@ -291,7 +342,7 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="charts-j">
-    <h2 data-tooltip="3D scatter, one point per (combination, total latent size) group. x = VAE latent size (log), y = extractor combination, z = number of runs in that group. Color = the group’s mean test F1 (Blues, 0–1).">VAE latent size × extractor combination × run count (color = mean test F1)</h2>
+    <h2 data-tooltip="3D scatter, one point per (combination, total latent size) group. x = VAE latent size (log), y = extractor combination, z = number of runs in that group. Color = the group’s mean test F1 (0–1 colour scale, set in the header).">VAE latent size × extractor combination × run count (color = mean test F1)</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="latent-volume-scatter" style="height:600px;"></div></div></div>
   </section>
 
@@ -370,6 +421,34 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
     <div class="chart-grid full"><div class="chart-box"><div id="extractor-f1-chart" style="height:460px;"></div></div></div>
   </section>
 
+</div><!-- /view-runs -->
+
+<div id="view-phases" hidden>
+  <section class="narrative">
+    <h3>Phase-summary files</h3>
+    <p style="margin:0 0 8px; font-size:0.92rem;">
+      The orchestrators (<code>scripts/orchestrator_phase*.py</code>) write aggregate
+      JSON files — <code>results/phase{1..6}*_top.json</code> and
+      <code>results/phase{4,5}_per_fold.json</code> — that hold <em>means over seeds/folds</em>,
+      not individual runs, so they don't fit the Runs report. This tab reads them directly.
+    </p>
+    <ul id="phase-narrative-list" style="font-size:0.9rem;"></ul>
+  </section>
+  <div id="phase-empty" class="pending-note">
+    No phase-summary files loaded. Add files like <code>results/phase2_top.json</code>,
+    <code>results/phase3_top.json</code>, <code>results/phase5_per_fold.json</code> …
+    (drag the whole <code>results/</code> folder and both tabs fill in).
+  </div>
+  <section id="phase-cross" hidden>
+    <h2 data-tooltip="For every extractor combination that appears in more than one loaded phase file, its mean F1 at each stage. Shows how the number moves as the pipeline adds hyperparameter tuning (Phase 3) and fold validation (Phase 4/5), and how far it drops without outlet identity (Phase 6).">Same combination across phases — how the score evolves</h2>
+    <div class="controls">
+      <label><input type="checkbox" id="phase-cross-test" checked> use test F1 (uncheck for validation F1)</label>
+    </div>
+    <div class="chart-grid full"><div class="chart-box"><div id="phase-cross-chart" style="height:480px;"></div></div></div>
+  </section>
+  <div id="phase-sections"></div>
+</div>
+
   <footer>FakeNewsStyle — standalone viewer (viewer/index.html), 100% client-side</footer>
 </section>
 
@@ -382,7 +461,56 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
 // =====================================================
 let allRuns = [];
 let excludedEntries = [];
+// Loaded results/phase*_top.json / phase*_per_fold.json aggregate files (see the
+// "Phase summaries" tab). One entry per file: { fileName, phaseNum, stage, kind,
+// title, data }.
+let phaseFiles = [];
+let mainView = 'runs';
 let filterText = '';
+// Which context Source/Domain identity states to show. This filter is global:
+// it drives both the summary table and every chart (renderAll works off
+// shownRuns, not allRuns).
+let ctxIdentityShow = { on: true, off: true, na: true };
+
+// allRuns = everything loaded from the JSON files; shownRuns = allRuns after the
+// global context-identity filter. Every narrative/table/chart renderer reads
+// shownRuns; only load bookkeeping and the "N loaded" header read allRuns.
+let shownRuns = [];
+
+function passesCtxIdentity(r) {
+  if (ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na) return true;
+  const rank = contextIdentityRank(r);
+  if (rank === -2) return ctxIdentityShow.na;   // context branch not used
+  if (rank === 0) return ctxIdentityShow.off;   // Source and Domain both off
+  return ctxIdentityShow.on;                    // Source and/or Domain on
+}
+
+// Global "only strong runs" toggle: keep runs whose test F1 clears 0.6.
+let f1FloorOn = false;
+const F1_FLOOR = 0.6;
+function passesF1Floor(r) {
+  if (!f1FloorOn) return true;
+  return typeof r.test_f1 === 'number' && r.test_f1 > F1_FLOOR;
+}
+
+function recomputeShownRuns() {
+  shownRuns = allRuns.filter(r => passesCtxIdentity(r) && passesF1Floor(r));
+  updateControlCount();
+}
+
+// Live count shown to the right of the filter controls: how many runs (and
+// distinct source JSON files) are currently visualized after the global filters.
+function updateControlCount() {
+  const el = document.getElementById('ctrl-count');
+  if (!el) return;
+  const total = allRuns.length;
+  const files = new Set(
+    shownRuns.map(r => (r.source_file || '').split(' → ')[0]).filter(Boolean)
+  ).size;
+  const runPart = shownRuns.length === total
+    ? `${total} run(s)` : `${shownRuns.length} / ${total} run(s)`;
+  el.textContent = `Showing ${runPart}${files ? ` · ${files} JSON file(s)` : ''}`;
+}
 let gapThreshold = 0.15;
 
 const KNOWN_MODALITIES = new Set(['semantic', 'emotion', 'style', 'context']);
@@ -411,6 +539,11 @@ function flattenRecord(record, sourceLabel) {
     corpus_fold: corpus.fold,
     corpus_mode: corpus.mode,
     latent_dims: record.latent_dims || {},
+    // { source, domain } hash-embedding widths of the context branch; 0 = that
+    // identity field was switched off. null when the record predates this field
+    // (added 2026-09-10) or context was excluded from the run.
+    context_dims: (record.context_dims && typeof record.context_dims === 'object') ? record.context_dims : null,
+    kan_output_dir: (record.paths || {}).kan_output_dir || '',
     epochs: { kan_epochs_run: epochs.kan_epochs_run ?? null, kan_epochs_requested: epochs.kan_epochs_requested ?? null,
               vae_epochs_requested: epochs.vae_epochs_requested ?? null },
     vae_hyperparams: record.vae_hyperparams || {},
@@ -456,6 +589,7 @@ async function processFileList(fileList) {
   const skippedNonJson = Array.from(fileList).filter(f => !(/\.json$/i.test(f.name) || f.type === 'application/json'));
 
   const runs = [];
+  const phases = [];
   const excluded = skippedNonJson.map(f => ({ file: f.name, reason: 'Not a .json file — skipped.' }));
 
   for (const file of files) {
@@ -475,6 +609,9 @@ async function processFileList(fileList) {
       continue;
     }
 
+    const phase = detectPhaseFile(file.name, json);
+    if (phase) { phases.push(phase); continue; }
+
     if (json && !Array.isArray(json) && Array.isArray(json.runs)) {
       // Consolidated {"runs": [...]} file: validate each entry independently.
       if (json.runs.length === 0) {
@@ -493,19 +630,22 @@ async function processFileList(fileList) {
     }
   }
 
-  return { runs, excluded };
+  return { runs, excluded, phases };
 }
 
 async function handleFiles(fileList) {
   if (!fileList || !fileList.length) return;
 
-  const { runs, excluded } = await processFileList(fileList);
+  const { runs, excluded, phases } = await processFileList(fileList);
   allRuns = runs;
+  phaseFiles = phases;
+  recomputeShownRuns();
   excludedEntries = excluded;
 
   renderExcludedPanels();
+  updatePhaseTab();
 
-  if (!allRuns.length) {
+  if (!allRuns.length && !phaseFiles.length) {
     // Stay on the loader screen so the user can see why nothing loaded and retry.
     document.getElementById('loader-screen').style.display = '';
     document.getElementById('report-screen').style.display = 'none';
@@ -518,7 +658,9 @@ async function handleFiles(fileList) {
   document.getElementById('report-screen').style.display = '';
   document.getElementById('change-files-btn').style.display = '';
   updateHeaderMeta();
-  renderAll();
+  // Land on whichever tab actually has content.
+  setMainView(allRuns.length ? 'runs' : 'phases');
+  if (allRuns.length) renderAll();
 }
 
 function renderExcludedPanels() {
@@ -545,7 +687,20 @@ function updateHeaderMeta() {
   } else if (hashes.size > 1) {
     hashNote = `<span style="color:var(--warn)">⚠ ${hashes.size} different dataset versions loaded</span>`;
   }
-  meta.innerHTML = `<span>Runs loaded: ${allRuns.length}</span>${hashNote}`;
+  // Distinct source JSON files feeding the runs (a consolidated {"runs": [...]}
+  // file tags its runs "<name> → runs[i]", so strip that suffix before counting).
+  const fileCount = new Set(
+    allRuns.map(r => (r.source_file || '').split(' → ')[0]).filter(Boolean)
+  ).size;
+  const excludedNote = excludedEntries.length
+    ? `<span style="color:var(--warn)">${excludedEntries.length} file(s) skipped</span>` : '';
+  const activeFilters = [];
+  if (!(ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na)) activeFilters.push('Context S/D');
+  if (f1FloorOn) activeFilters.push('F1 > ' + F1_FLOOR);
+  const filteredNote = shownRuns.length !== allRuns.length
+    ? `<span style="color:var(--accent)">${shownRuns.length} shown (${activeFilters.join(' + ') || 'filtered'})</span>` : '';
+  meta.innerHTML = `<span>Evaluations: ${allRuns.length} run(s)`
+    + `${fileCount ? ` from ${fileCount} JSON file(s)` : ''}</span>${filteredNote}${excludedNote}${hashNote}`;
 }
 
 function escapeHtml(s) {
@@ -572,7 +727,9 @@ dropzone.addEventListener('drop', (e) => {
 
 document.getElementById('change-files-btn').addEventListener('click', () => {
   allRuns = [];
+  shownRuns = [];
   excludedEntries = [];
+  phaseFiles = [];
   fileInput.value = '';
   document.getElementById('loader-screen').style.display = '';
   document.getElementById('report-screen').style.display = 'none';
@@ -673,24 +830,24 @@ function inferCorpus(paths) {
 // =====================================================
 function renderNarrative() {
   const container = document.getElementById('narrative-list');
-  if (!allRuns.length) { container.innerHTML = '<li>No runs to summarize.</li>'; return; }
+  if (!shownRuns.length) { container.innerHTML = '<li>No runs to summarize.</li>'; return; }
 
   const items = [];
 
-  const byF1 = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined).sort((a, b) => b.test_f1 - a.test_f1);
+  const byF1 = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined).sort((a, b) => b.test_f1 - a.test_f1);
   if (byF1.length) {
     const r = byF1[0];
     items.push(`Best run by test F1: <strong>${escapeHtml(r.run_id)}</strong> (${escapeHtml(r.combo)}) — F1=${fmtNum(r.test_f1)}, accuracy=${fmtNum(r.test_accuracy)}.`);
   }
 
-  const byEce = allRuns.filter(r => r.test_ece !== null && r.test_ece !== undefined).sort((a, b) => a.test_ece - b.test_ece);
+  const byEce = shownRuns.filter(r => r.test_ece !== null && r.test_ece !== undefined).sort((a, b) => a.test_ece - b.test_ece);
   if (byEce.length) {
     const r = byEce[0];
     items.push(`Best calibration (lowest ECE): <strong>${escapeHtml(r.run_id)}</strong> (${escapeHtml(r.combo)}) — ECE=${fmtNum(r.test_ece)}.`);
   }
 
   const byCombo = {};
-  allRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  shownRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
   const comboStats = Object.entries(byCombo).map(([combo, rs]) => {
     const accs = rs.map(r => r.test_accuracy).filter(v => v !== null && v !== undefined);
     return { combo, mean: mean(accs), nExtractors: rs[0].active_extractors.length };
@@ -702,7 +859,7 @@ function renderNarrative() {
     items.push(`Most efficient combination (mean accuracy within 2pts of the max, ${fmtNum(maxAcc)}): <strong>${escapeHtml(winner.combo)}</strong> (${winner.nExtractors} extractor${winner.nExtractors === 1 ? '' : 's'}, mean accuracy=${fmtNum(winner.mean)}).`);
   }
 
-  const degenerateRuns = allRuns.map(r => ({ r, tag: detectDegenerate(r) })).filter(x => x.tag);
+  const degenerateRuns = shownRuns.map(r => ({ r, tag: detectDegenerate(r) })).filter(x => x.tag);
   if (degenerateRuns.length) {
     const list = degenerateRuns.map(x => `${escapeHtml(x.r.run_id)} (always predicts "${x.tag}")`).join(', ');
     items.push(`<span class="warn-item">⚠ ${degenerateRuns.length} run(s) collapsed to the baseline: ${list}.</span>`);
@@ -728,6 +885,40 @@ function fmtLatentDims(ld) {
   return Object.entries(ld).map(([k, v]) => `<span style="color:var(--text-dim)">${escapeHtml(k)}</span>=${v}`).join(', ');
 }
 
+// Whether the context branch's Source / Domain identity fields were on (dim > 0)
+// or off (dim = 0, the identity-free control of Phase 6). When the run record
+// doesn't carry context_dims (added 2026-09-10), infer it: Phase 6 is the only
+// protocol that zeroes them, so a phase6 output path -> off, anything else ->
+// the 32/32 CLI default -> on. Inferred cells are marked with a trailing *.
+function contextIdentityBools(r) {
+  const cd = r.context_dims;
+  if (cd) {
+    return { source: Number(cd.source) > 0, domain: Number(cd.domain) > 0,
+             srcDim: cd.source, domDim: cd.domain, assumed: false };
+  }
+  const isPhase6 = /(^|[/_])phase6([/_]|$)/.test(r.kan_output_dir || '');
+  return { source: !isPhase6, domain: !isPhase6, srcDim: null, domDim: null, assumed: true };
+}
+function contextIdentityRank(r) {
+  if (!r.active_extractors.includes('context')) return -2;   // context not used
+  const s = contextIdentityBools(r);
+  return (s.source ? 2 : 0) + (s.domain ? 1 : 0);
+}
+function fmtContextIdentity(r) {
+  if (!r.active_extractors.includes('context')) {
+    return '<span style="color:var(--text-dim)">context off</span>';
+  }
+  const s = contextIdentityBools(r);
+  const chip = (name, on, dim) => {
+    const suffix = (on && dim != null) ? ` (${dim})` : '';
+    return `<span class="badge ${on ? 'badge-style' : 'badge-other'}">${name} ${on ? 'on' : 'off'}${suffix}</span>`;
+  };
+  const star = s.assumed
+    ? ' <span style="color:var(--text-dim)" title="not recorded in this run — inferred from the run path (Phase 6 → off) or the 32/32 CLI default (→ on)">*</span>'
+    : '';
+  return chip('Source', s.source, s.srcDim) + ' ' + chip('Domain', s.domain, s.domDim) + star;
+}
+
 function degenerateTagHtml(r) {
   const tag = detectDegenerate(r);
   return tag ? `<span class="degenerate-tag">⚠ collapsed ("${tag}")</span>` : '';
@@ -745,6 +936,9 @@ const PARAM_COLUMNS = [
   { key: 'combo', label: 'Active extractors', sort: (r) => r.combo,
     tip: 'Which feature branches (semantic / emotion / style / context) fed the KAN in this run.',
     render: (r) => extractorBadges(r.active_extractors) },
+  { key: 'context_identity', label: 'Context Source/Domain', sort: contextIdentityRank,
+    tip: 'Whether the context branch kept its Source and Domain hash-embedding fields on (--context_source_dim / --context_domain_dim > 0, the 32/32 default) or switched them off (=0), the identity-free control of Phase 6 that isolates outlet leakage. "context off" = the branch was not used at all. A trailing * means the run record predates this field (added 2026-09-10) and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.',
+    render: fmtContextIdentity },
   { key: 'corpus', label: 'Corpus', sort: (r) => r.corpus_fold === null ? -1 : r.corpus_fold,
     tip: 'Corpus this run used: the full original split (fixed train/development/test), a "normal" fold of --corpus_mode kfold (stratified by label, not by outlet), or a "disjoint" fold of --corpus_mode source_disjoint (no Source appears in more than one split of the fold -- the outlet-leakage test). N/Total are the fold index (--kfold_index/--source_split_index) and how many folds were generated (--kfold_n/--source_split_n). Inferred from the run\'s kan_output_dir / vae_model_dirs paths.',
     render: (r) => {
@@ -836,7 +1030,7 @@ const ALL_COLUMNS_BY_KEY = Object.fromEntries([...PARAM_COLUMNS, ...METRIC_COLUM
 let sortState = { key: 'timestamp', asc: true };
 
 function filteredSortedRuns(state) {
-  let rows = allRuns;
+  let rows = shownRuns;
   if (filterText) {
     const q = filterText.toLowerCase();
     rows = rows.filter(r =>
@@ -846,6 +1040,7 @@ function filteredSortedRuns(state) {
       (r.source_file || '').toLowerCase().includes(q)
     );
   }
+  // The context-identity filter is already applied globally (shownRuns).
   const col = ALL_COLUMNS_BY_KEY[state.key] || ALL_COLUMNS_BY_KEY.run_id;
   rows = [...rows].sort((a, b) => {
     let va = col.sort(a), vb = col.sort(b);
@@ -913,12 +1108,28 @@ document.getElementById('table-filter').addEventListener('input', (e) => {
   renderSummaryTable();
 });
 
+document.querySelectorAll('.ctx-id-chk').forEach(chk => {
+  chk.addEventListener('change', () => {
+    ctxIdentityShow[chk.value] = chk.checked;
+    recomputeShownRuns();
+    updateHeaderMeta();
+    if (allRuns.length) renderAll();
+  });
+});
+
+document.getElementById('f1-floor-chk').addEventListener('change', (e) => {
+  f1FloorOn = e.target.checked;
+  recomputeShownRuns();
+  updateHeaderMeta();
+  if (allRuns.length) renderAll();
+});
+
 // =====================================================
 // Charts (Plotly, via CDN)
 // =====================================================
 function renderBarChart() {
-  const labels = allRuns.map(r => r.run_id.length > 20 ? r.run_id.slice(-12) : r.run_id);
-  const mk = (split) => allRuns.map(r => (r.metrics[split] || {}).accuracy ?? null);
+  const labels = shownRuns.map(r => r.run_id.length > 20 ? r.run_id.slice(-12) : r.run_id);
+  const mk = (split) => shownRuns.map(r => (r.metrics[split] || {}).accuracy ?? null);
   const traces = ['train', 'val', 'test'].map(split => ({
     x: labels, y: mk(split), name: split, type: 'bar',
   }));
@@ -932,44 +1143,60 @@ function renderBarChart() {
   }, { responsive: true, displaylogo: false });
 }
 
-function renderHeatmap() {
+// `agg` is 'mean' or 'max'; both charts share layout, differ only in how a
+// combination's runs are aggregated. Cell hover always shows the run count.
+function renderComboHeatmap(divId, agg) {
   const metrics = ['test_accuracy', 'test_f1', 'test_roc_auc', 'test_log_loss'];
   const metricLabels = ['accuracy', 'f1', 'roc_auc', 'log_loss'];
+  const isMax = agg === 'max';
   const byCombo = {};
-  allRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  shownRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  const valsFor = (combo, m) => byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
+  const aggregate = (vals) => isMax ? Math.max(...vals) : mean(vals);
   const combos = Object.keys(byCombo).sort((a, b) => {
-    const meanA = mean(byCombo[a].map(r => r.test_f1 || 0));
-    const meanB = mean(byCombo[b].map(r => r.test_f1 || 0));
-    return meanA - meanB;
+    const va = valsFor(a, 'test_f1'), vb = valsFor(b, 'test_f1');
+    return (va.length ? aggregate(va) : 0) - (vb.length ? aggregate(vb) : 0);
   });
   const z = combos.map(combo => metrics.map(m => {
-    const vals = byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
-    return vals.length ? mean(vals) : null;
+    const vals = valsFor(combo, m);
+    return vals.length ? aggregate(vals) : null;
   }));
   const text = combos.map(combo => metrics.map(m => {
-    const vals = byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
+    const vals = valsFor(combo, m);
     if (!vals.length) return '';
+    if (isMax) return Math.max(...vals).toFixed(3);
     const m_ = mean(vals);
     return vals.length > 1 ? `${m_.toFixed(3)}±${std(vals, m_).toFixed(3)}` : m_.toFixed(3);
   }));
+  // one run-count per row, broadcast across the metric columns for the cell hover
+  const customdata = combos.map(combo => metricLabels.map(() => byCombo[combo].length));
 
-  Plotly.newPlot('heatmap-chart', [{
-    z, x: metricLabels, y: combos, type: 'heatmap', colorscale: 'Blues',
-    text, texttemplate: '%{text}', hovertemplate: '%{y} · %{x}: %{z:.4f}<extra></extra>',
+  Plotly.newPlot(divId, [{
+    z, x: metricLabels, y: combos, customdata, type: 'heatmap', colorscale: f1Colorscale(),
+    zmin: 0, zmax: 1,  // colour scale is always pinned to [0, 1]
+    text, texttemplate: '%{text}',
+    hovertemplate: '%{y} · %{x}: %{z:.4f}<br>%{customdata} run(s)<extra></extra>',
   }], {
-    title: 'Extractor combinations vs. test metrics (mean±std if there are multiple runs)',
+    title: isMax
+      ? 'Extractor combinations vs. test metrics (max across runs)'
+      : 'Extractor combinations vs. test metrics (mean; mean±std if there are multiple runs)',
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { color: '#1a1f2b' },
     margin: { t: 40, l: 220 },
   }, { responsive: true, displaylogo: false });
 }
 
+function renderHeatmap() {
+  renderComboHeatmap('heatmap-chart-max', 'max');
+  renderComboHeatmap('heatmap-chart', 'mean');
+}
+
 function renderCalibrationScatters() {
-  const x = allRuns.map(r => r.test_accuracy);
-  const hover = allRuns.map(r => `${r.run_id}<br>${r.combo}`);
+  const x = shownRuns.map(r => r.test_accuracy);
+  const hover = shownRuns.map(r => `${r.run_id}<br>${r.combo}`);
 
   Plotly.newPlot('scatter-ece', [{
-    x, y: allRuns.map(r => r.test_ece), text: hover, mode: 'markers',
+    x, y: shownRuns.map(r => r.test_ece), text: hover, mode: 'markers',
     marker: { size: 10, color: '#6ea8fe' }, hovertemplate: '%{text}<br>accuracy=%{x:.4f}<br>ece=%{y:.4f}<extra></extra>',
   }], {
     title: 'ECE (test) vs. Accuracy (test)',
@@ -979,7 +1206,7 @@ function renderCalibrationScatters() {
   }, { responsive: true, displaylogo: false });
 
   Plotly.newPlot('scatter-brier', [{
-    x, y: allRuns.map(r => r.test_brier_score), text: hover, mode: 'markers',
+    x, y: shownRuns.map(r => r.test_brier_score), text: hover, mode: 'markers',
     marker: { size: 10, color: '#ffb454' }, hovertemplate: '%{text}<br>accuracy=%{x:.4f}<br>brier=%{y:.4f}<extra></extra>',
   }], {
     title: 'Brier score (test) vs. Accuracy (test)',
@@ -996,10 +1223,10 @@ function renderCalibrationScatters() {
 //       have been seen so far, not a label
 //   z = VAE latent size actually fed to the KAN -- the sum of latent_dims
 //       over the run's active branches (per-branch breakdown is in the hover)
-//   color = test F1, on a fixed 0..1 Blues scale (same palette as the heatmaps)
+//   color = test F1, on the shared 0..1 colour scale (see f1Colorscale)
 function renderCombo3DScatter() {
   const byCombo = {};
-  allRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  shownRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
 
   // y order: fewer extractors first, then alphabetical -- stable regardless of
   // the order files were loaded in.
@@ -1036,7 +1263,7 @@ function renderCombo3DScatter() {
     marker: {
       size: 5,
       color: colors,
-      colorscale: 'Blues',
+      colorscale: f1Colorscale(),
       cmin: 0, cmax: 1,
       colorbar: { title: 'test F1', tickvals: [0, 0.25, 0.5, 0.75, 1] },
       opacity: 0.9,
@@ -1068,7 +1295,7 @@ function renderF1Boxplot() {
   ];
 
   const traces = groups.map(g => {
-    const rs = allRuns.filter(r => r.corpus_mode === g.key
+    const rs = shownRuns.filter(r => r.corpus_mode === g.key
       && r.test_f1 !== null && r.test_f1 !== undefined);
     return {
       type: 'box', name: `${g.name} (n=${rs.length})`,
@@ -1105,7 +1332,7 @@ function renderF1Boxplot() {
 // colored by how many branches the combination uses.
 function renderF1ByComboBoxplot() {
   const byCombo = {};
-  allRuns.forEach(r => {
+  shownRuns.forEach(r => {
     if (r.test_f1 === null || r.test_f1 === undefined) return;
     (byCombo[r.combo] = byCombo[r.combo] || []).push(r);
   });
@@ -1162,7 +1389,7 @@ function renderF1ByComboBoxplot() {
 // mean test F1 over the runs (seeds) in that cell; error bar = standard
 // deviation across them.
 function renderF1ByFoldBars() {
-  const withF1 = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const withF1 = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
   const foldRuns = withF1.filter(r => r.corpus_fold !== null && r.corpus_fold !== undefined);
   const fullRuns = withF1.filter(r => r.corpus_mode === 'original');
 
@@ -1226,13 +1453,13 @@ function renderF1ByFoldBars() {
 // Heatmap: rows = extractor combinations, columns = one per distinct KAN
 // hyperparameter setting (e.g. "num_basis=8", "hidden_dim=32", ...), grouped
 // by knob. Cell color = mean test F1 over the runs of that combination whose
-// KAN used that setting, on a fixed 0..1 Blues scale (light = low F1, dark =
-// high F1 -- the same palette as the "Extractor combinations vs. test
+// KAN used that setting, on the shared 0..1 colour scale (see f1Colorscale --
+// the same palette as the "Extractor combinations vs. test
 // metrics" heatmap). Reads as "for this combination, which KAN settings gave
 // the best F1?". `seed` and any knob that was never swept are dropped.
 function renderKanParamsHeatmap() {
   const target = document.getElementById('kan-params-heatmap');
-  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const runs = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
   if (!runs.length) {
     target.innerHTML = '<p class="empty-msg">No runs with a test F1 to plot.</p>';
     return;
@@ -1290,7 +1517,7 @@ function renderKanParamsHeatmap() {
 
   Plotly.newPlot('kan-params-heatmap', [{
     z, x: columns.map(c => c.label), y: combos, text, type: 'heatmap',
-    colorscale: 'Blues', zmin: 0, zmax: 1,
+    colorscale: f1Colorscale(), zmin: 0, zmax: 1,
     texttemplate: '%{text}', hoverongaps: false,
     hovertemplate: '%{y}<br>%{x}<br>mean test F1 = %{z:.4f}<extra></extra>',
     colorbar: { title: 'mean test F1' },
@@ -1310,7 +1537,7 @@ function renderKanParamsHeatmap() {
 // help. boxmean:'sd' marks the mean and ±1 sd inside each box.
 function renderNeuronsVariationChart() {
   const target = document.getElementById('neurons-variation-chart');
-  const rs = allRuns.filter(r =>
+  const rs = shownRuns.filter(r =>
     r.test_f1 !== null && r.test_f1 !== undefined &&
     typeof (r.kan_hyperparams || {}).hidden_dim === 'number');
 
@@ -1349,16 +1576,16 @@ function renderNeuronsVariationChart() {
 // 3D scatter: VAE latent size (x, log) × extractor combination (y) × run
 // count / "volume" (z). Runs are grouped by (combination, total latent size),
 // so a combination tried at two latent sizes is two markers. Marker color =
-// mean test F1 of the group (same 0..1 Blues scale as the heatmaps).
+// mean test F1 of the group (shared 0..1 colour scale, see f1Colorscale).
 function renderLatentVsVolumeScatter() {
   const target = document.getElementById('latent-volume-scatter');
-  if (!allRuns.length) {
+  if (!shownRuns.length) {
     target.innerHTML = '<p class="empty-msg">No runs loaded.</p>';
     return;
   }
 
   const groups = {};
-  allRuns.forEach(r => {
+  shownRuns.forEach(r => {
     const perBranch = Object.entries(r.latent_dims || {})
       .filter(([k]) => r.active_extractors.includes(k));
     const latentSum = perBranch.reduce((s, [, v]) => s + Number(v), 0);
@@ -1370,7 +1597,7 @@ function renderLatentVsVolumeScatter() {
   });
 
   const comboMeta = {};
-  allRuns.forEach(r => { comboMeta[r.combo] = r.active_extractors.length; });
+  shownRuns.forEach(r => { comboMeta[r.combo] = r.active_extractors.length; });
   const combos = [...new Set(Object.values(groups).map(g => g.combo))]
     .sort((a, b) => (comboMeta[a] - comboMeta[b]) || a.localeCompare(b));
   const comboIndex = Object.fromEntries(combos.map((c, i) => [c, i]));
@@ -1393,7 +1620,7 @@ function renderLatentVsVolumeScatter() {
     hovertemplate: '%{customdata}<extra></extra>',
     marker: {
       size: 6,
-      color: colors, colorscale: 'Blues', cmin: 0, cmax: 1,
+      color: colors, colorscale: f1Colorscale(), cmin: 0, cmax: 1,
       colorbar: { title: 'mean test F1', tickvals: [0, 0.25, 0.5, 0.75, 1] },
       opacity: 0.9,
       line: { width: 0.5, color: 'rgba(0,0,0,0.3)' },
@@ -1419,6 +1646,47 @@ const CHART_PALETTE = ['#2563eb', '#16a34a', '#b45309', '#dc2626', '#9333ea', '#
                        '#db2777', '#65a30d', '#ca8a04', '#4f46e5', '#0d9488', '#e11d48'];
 const CHART_LAYOUT = { paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#1a1f2b' } };
 const CHART_CFG = { responsive: true, displaylogo: false };
+
+// ---- User-editable 0..1 / F1 heatmap colour scale -------------------------
+// Every sequential 0..1 scale in this viewer (the extractor-metric and KAN
+// hyper-parameter heatmaps, the confusion matrix, and the F1-coloured 3D
+// scatters + parallel-coordinates line) is built from these three stops via
+// f1Colorscale(), so the palette picker in the report header retunes them
+// all at once. The choice persists in localStorage.
+const F1_SCALE_DEFAULT = { low: '#9ac0f9', mid: '#6baed6', high: '#aa1308' };  // rgb(154,192,249) / rgb(107,174,214) / rgb(170,19,8)
+let f1Scale = loadF1Scale();
+function loadF1Scale() {
+  try {
+    const s = JSON.parse(localStorage.getItem('fns_f1_scale') || 'null');
+    if (s && s.low && s.mid && s.high) return { low: s.low, mid: s.mid, high: s.high };
+  } catch (e) { /* corrupt / unavailable storage -> fall back to default */ }
+  return { ...F1_SCALE_DEFAULT };
+}
+function saveF1Scale() {
+  try { localStorage.setItem('fns_f1_scale', JSON.stringify(f1Scale)); } catch (e) { /* ignore */ }
+}
+function f1Colorscale() {
+  return [[0, f1Scale.low], [0.5, f1Scale.mid], [1, f1Scale.high]];
+}
+function initPaletteControls() {
+  const keys = ['low', 'mid', 'high'];
+  const preview = document.getElementById('palette-preview');
+  const sync = (rerender) => {
+    keys.forEach(k => { const i = document.getElementById('palette-' + k); if (i) i.value = f1Scale[k]; });
+    if (preview) preview.style.background =
+      `linear-gradient(90deg, ${f1Scale.low} 0%, ${f1Scale.mid} 50%, ${f1Scale.high} 100%)`;
+    saveF1Scale();
+    if (rerender && allRuns.length) renderAll();
+  };
+  keys.forEach(k => {
+    const inp = document.getElementById('palette-' + k);
+    if (inp) inp.addEventListener('input', () => { f1Scale[k] = inp.value; sync(true); });
+  });
+  const reset = document.getElementById('palette-reset');
+  if (reset) reset.addEventListener('click', () => { f1Scale = { ...F1_SCALE_DEFAULT }; sync(true); });
+  sync(false);
+}
+initPaletteControls();
 function baseLayout(extra) { return Object.assign({}, CHART_LAYOUT, extra); }
 
 function chartComboOrder(runs) {
@@ -1446,7 +1714,7 @@ function chartEmpty(id, msg) {
 // (k) Latent-dimension sweep: test F1 vs. VAE latent size, one line per
 // combination (mean ± sd across seeds). The classic "where's the elbow?" plot.
 function renderLatentSweep() {
-  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined && chartLatentSum(r) > 0);
+  const runs = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined && chartLatentSum(r) > 0);
   if (!runs.length) { chartEmpty('latent-sweep-chart', 'No runs carry latent dims together with a test F1.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
@@ -1477,7 +1745,7 @@ function renderLatentSweep() {
 
 // (l) Confusion matrix of the single best run by test F1 (row-normalized).
 function renderConfusionMatrix() {
-  const runs = allRuns.filter(r => {
+  const runs = shownRuns.filter(r => {
     const t = (r.metrics && r.metrics.test) || {};
     return ['tn', 'fp', 'fn', 'tp'].every(k => typeof t[k] === 'number') &&
       r.test_f1 !== null && r.test_f1 !== undefined;
@@ -1492,7 +1760,7 @@ function renderConfusionMatrix() {
   Plotly.newPlot('confusion-matrix-chart', [{
     type: 'heatmap', z: zNorm, text, texttemplate: '%{text}',
     x: ['predicted True/Real', 'predicted Fake'], y: ['actual True/Real', 'actual Fake'],
-    colorscale: 'Blues', zmin: 0, zmax: 1,
+    colorscale: f1Colorscale(), zmin: 0, zmax: 1,
     hovertemplate: '%{y} → %{x}<br>row-normalized = %{z:.3f}<extra></extra>',
     colorbar: { title: 'row share' },
   }], baseLayout({
@@ -1504,7 +1772,7 @@ function renderConfusionMatrix() {
 
 // (m) Per-topic test F1, grouped bars by extractor combination.
 function renderTopicBreakdown() {
-  const runs = allRuns.filter(r => r.topic_breakdown && typeof r.topic_breakdown === 'object');
+  const runs = shownRuns.filter(r => r.topic_breakdown && typeof r.topic_breakdown === 'object');
   if (!runs.length) { chartEmpty('topic-breakdown-chart', 'No runs carry a topic_breakdown block.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
@@ -1539,7 +1807,7 @@ function renderTopicBreakdown() {
 
 // (n) Precision vs. recall scatter with dotted iso-F1 contours.
 function renderPrecisionRecall() {
-  const runs = allRuns.filter(r =>
+  const runs = shownRuns.filter(r =>
     typeof chartTestMetric(r, 'precision') === 'number' &&
     typeof chartTestMetric(r, 'recall') === 'number');
   if (!runs.length) { chartEmpty('precision-recall-chart', 'No runs log test precision/recall.'); return; }
@@ -1577,7 +1845,7 @@ function renderPrecisionRecall() {
 // (o) Efficiency frontier: test F1 vs. KAN parameter count, with the Pareto
 // step line (best F1 reachable at each budget).
 function renderParetoEfficiency() {
-  const runs = allRuns.filter(r =>
+  const runs = shownRuns.filter(r =>
     r.test_f1 !== null && r.test_f1 !== undefined && typeof r.num_parameters === 'number');
   if (!runs.length) { chartEmpty('pareto-chart', 'No runs log num_parameters together with a test F1.'); return; }
   const combos = chartComboOrder(runs);
@@ -1615,7 +1883,7 @@ function renderParetoEfficiency() {
 // (p) Parallel coordinates over the hyperparameters that actually vary,
 // ending in test F1; line color = test F1.
 function renderParallelCoords() {
-  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const runs = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
   if (!runs.length) { chartEmpty('parcoords-chart', 'No runs with a test F1.'); return; }
   const candidates = [
     { label: 'num_basis', get: r => (r.kan_hyperparams || {}).num_basis },
@@ -1650,7 +1918,7 @@ function renderParallelCoords() {
   dims.push({ label: 'test F1', values: runs.map(r => r.test_f1) });
   Plotly.newPlot('parcoords-chart', [{
     type: 'parcoords',
-    line: { color: runs.map(r => r.test_f1), colorscale: 'Blues', cmin: 0, cmax: 1,
+    line: { color: runs.map(r => r.test_f1), colorscale: f1Colorscale(), cmin: 0, cmax: 1,
       showscale: true, colorbar: { title: 'test F1' } },
     dimensions: dims,
   }], baseLayout({
@@ -1661,7 +1929,7 @@ function renderParallelCoords() {
 
 // (q) Seed variance: test F1 by random seed, strip/box per combination.
 function renderSeedStrip() {
-  const runs = allRuns.filter(r =>
+  const runs = shownRuns.filter(r =>
     r.test_f1 !== null && r.test_f1 !== undefined && r.seed !== null && r.seed !== undefined);
   if (!runs.length) { chartEmpty('seed-strip-chart', 'No runs log a seed together with a test F1.'); return; }
   const combos = chartComboOrder(runs);
@@ -1689,7 +1957,7 @@ function renderSeedStrip() {
 
 // (r) Overfitting slope chart: train -> val -> test accuracy, one line per run.
 function renderSlopeChart() {
-  const runs = allRuns.filter(r => {
+  const runs = shownRuns.filter(r => {
     const m = r.metrics || {};
     return ['train', 'val', 'test'].every(s => m[s] && typeof m[s].accuracy === 'number');
   });
@@ -1716,8 +1984,8 @@ function renderSlopeChart() {
 
 // (s) Dumbbell: mean F1 on normal folds vs. source-disjoint folds, per combo.
 function renderDumbbell() {
-  const kf = allRuns.filter(r => r.corpus_mode === 'kfold' && r.test_f1 !== null && r.test_f1 !== undefined);
-  const dj = allRuns.filter(r => r.corpus_mode === 'source_disjoint' && r.test_f1 !== null && r.test_f1 !== undefined);
+  const kf = shownRuns.filter(r => r.corpus_mode === 'kfold' && r.test_f1 !== null && r.test_f1 !== undefined);
+  const dj = shownRuns.filter(r => r.corpus_mode === 'source_disjoint' && r.test_f1 !== null && r.test_f1 !== undefined);
   if (!kf.length || !dj.length) {
     chartEmpty('dumbbell-chart', 'Needs runs from both --corpus_mode kfold and source_disjoint.');
     return;
@@ -1753,7 +2021,7 @@ function renderDumbbell() {
 
 // (t) Diverging calibration bars: ECE (left) vs. Brier (right), per combo.
 function renderCalibrationDiverging() {
-  const runs = allRuns.filter(r =>
+  const runs = shownRuns.filter(r =>
     typeof r.test_ece === 'number' && typeof r.test_brier_score === 'number');
   if (!runs.length) { chartEmpty('calibration-diverging-chart', 'No runs log test ECE/Brier.'); return; }
   const g = {};
@@ -1782,7 +2050,7 @@ function renderCalibrationDiverging() {
 // (u) Scatterplot matrix of test metrics, colored by combination.
 function renderMetricsSplom() {
   const keys = [['f1', 'F1'], ['roc_auc', 'ROC-AUC'], ['pr_auc', 'PR-AUC'], ['mcc', 'MCC'], ['ece', 'ECE']];
-  const runs = allRuns.filter(r => keys.some(([k]) => typeof chartTestMetric(r, k) === 'number'));
+  const runs = shownRuns.filter(r => keys.some(([k]) => typeof chartTestMetric(r, k) === 'number'));
   if (runs.length < 3) { chartEmpty('splom-chart', 'Need at least 3 runs with test metrics.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
@@ -1806,7 +2074,7 @@ function renderMetricsSplom() {
 
 // (v) Bump chart: combination rank by mean test F1, fold by fold.
 function renderBumpChart() {
-  const runs = allRuns.filter(r =>
+  const runs = shownRuns.filter(r =>
     r.corpus_fold !== null && r.corpus_fold !== undefined &&
     r.test_f1 !== null && r.test_f1 !== undefined);
   if (!runs.length) { chartEmpty('bump-chart', 'No fold-tagged runs with a test F1.'); return; }
@@ -1839,7 +2107,7 @@ function renderBumpChart() {
 
 // (w) Prediction-entropy distribution by combination (violin).
 function renderEntropyViolin() {
-  const runs = allRuns.filter(r => typeof chartTestMetric(r, 'entropy_mean') === 'number');
+  const runs = shownRuns.filter(r => typeof chartTestMetric(r, 'entropy_mean') === 'number');
   if (!runs.length) { chartEmpty('entropy-violin-chart', 'No runs log test entropy_mean.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
@@ -1862,7 +2130,7 @@ function renderEntropyViolin() {
 
 // (x) Empirical CDF of test F1 -- overall plus one dotted curve per combo.
 function renderF1Ecdf() {
-  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const runs = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
   if (!runs.length) { chartEmpty('f1-ecdf-chart', 'No runs with a test F1.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
@@ -1891,7 +2159,7 @@ function renderF1Ecdf() {
 // active vs. every run where it is not (a combo run counts toward each of its
 // branches). Answers "does this one modality help on its own terms?".
 function renderF1ByExtractor() {
-  const runs = allRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
+  const runs = shownRuns.filter(r => r.test_f1 !== null && r.test_f1 !== undefined);
   if (!runs.length) { chartEmpty('extractor-f1-chart', 'No runs with a test F1.'); return; }
 
   const EXTRACTORS = ['semantic', 'emotion', 'style', 'context'];
@@ -1945,6 +2213,335 @@ function updateStickyOffsets() {
   }
 }
 window.addEventListener('resize', updateStickyOffsets);
+
+// =====================================================
+// Phase-summary files ("Phase summaries" tab)
+// results/phase{1..6}*_top.json + phase{4,5}_per_fold.json hold means over
+// seeds/folds, not individual runs, so they can't go through flattenRecord.
+// Detect them, normalize each to a common entry shape, and visualize.
+// =====================================================
+function detectPhaseFile(name, json) {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+  if (json.run_id || Array.isArray(json.runs)) return null;
+
+  let kind = null;
+  if (json.by_branch && typeof json.by_branch === 'object') kind = 'branch_dims';
+  else if (Array.isArray(json.entries)) kind = 'branch_dims_single';
+  else if (json.configs && typeof json.configs === 'object') kind = 'per_fold';
+  else if (Array.isArray(json.results)) kind = 'fold_ranking';
+  else if (Array.isArray(json.ranking)) kind = 'combo_ranking';
+  else if (Array.isArray(json.top)) {
+    const it = json.top[0] || {};
+    kind = ('kan_num_basis' in it || 'variant_label' in it) ? 'combo_tuned' : 'combo_ranking';
+  }
+  if (!kind) return null;
+
+  const pm = name.toLowerCase().match(/phase[_-]?(\d+)/);
+  const phaseNum = pm ? Number(pm[1]) : null;
+  let stage = null;
+  if (kind === 'branch_dims_single') stage = 'Stage A';
+  else if (kind === 'combo_ranking' && json.context_source_dim !== undefined) stage = 'Stage B';
+
+  const KIND_DESC = {
+    branch_dims: 'latent-dim ranking per branch',
+    branch_dims_single: 'identity-free context latent-dim ranking',
+    combo_ranking: 'extractor-combination ranking (default hyperparameters)',
+    combo_tuned: 'best hyperparameter variant per combination',
+    fold_ranking: 'fold-validated combination ranking',
+    per_fold: 'per-fold detail per combination',
+  };
+  const head = phaseNum ? `Phase ${phaseNum}${stage ? ' · ' + stage : ''}` : name.replace(/\.json$/i, '');
+  return { fileName: name, phaseNum, stage, kind, title: `${head} — ${KIND_DESC[kind] || kind}`, data: json };
+}
+
+function fmtPhaseHyper(c) {
+  if (!c) return null;
+  const p = [];
+  if (c.vae_beta !== undefined) p.push('β' + c.vae_beta);
+  if (c.vae_dropout !== undefined) p.push('vdrop' + c.vae_dropout);
+  if (c.kan_num_basis !== undefined) p.push('basis' + c.kan_num_basis);
+  if (c.kan_hidden_dim !== undefined) p.push('hid' + c.kan_hidden_dim);
+  if (c.kan_weight_decay !== undefined) p.push('wd' + c.kan_weight_decay);
+  return p.join(' ') || null;
+}
+
+// -> { groups: [{ name, entries: [entry] }] }
+// entry: { label, extractors, dim, variant, hyper, val_mean, val_std, val_min,
+//          val_max, test_mean, test_std, n_runs, n_folds, per_fold }
+function phaseNormalize(pf) {
+  const d = pf.data;
+  const mk = (o) => ({
+    label: o.label, extractors: o.extractors || [], dim: o.dim ?? null,
+    variant: o.variant ?? null, hyper: o.hyper ?? null,
+    val_mean: o.val_mean ?? null, val_std: o.val_std ?? null,
+    val_min: o.val_min ?? null, val_max: o.val_max ?? null,
+    test_mean: o.test_mean ?? null, test_std: o.test_std ?? null,
+    n_runs: o.n_runs ?? null, n_folds: o.n_folds ?? null, per_fold: o.per_fold ?? null,
+  });
+
+  if (pf.kind === 'branch_dims') {
+    return { groups: Object.entries(d.by_branch).map(([branch, arr]) => ({
+      name: branch,
+      entries: (arr || []).map(e => mk({
+        label: `dim ${e.dim}`, extractors: [branch], dim: e.dim,
+        val_mean: e.f1_mean, val_std: e.f1_std, test_mean: e.test_f1_mean, n_runs: e.n_runs,
+      })),
+    })) };
+  }
+  if (pf.kind === 'branch_dims_single') {
+    return { groups: [{ name: 'context (identity-free)', entries: (d.entries || []).map(e => mk({
+      label: `dim ${e.dim}`, extractors: ['context'], dim: e.dim,
+      val_mean: e.f1_mean, val_std: e.f1_std, test_mean: e.test_f1_mean, n_runs: e.n_runs,
+    })) }] };
+  }
+  if (pf.kind === 'combo_ranking') {
+    const arr = d.top || d.ranking || [];
+    return { groups: [{ name: '', entries: arr.map(e => mk({
+      label: (e.active_extractors || []).join('+') || '(none)',
+      extractors: e.active_extractors || [],
+      dim: e.latent_dims ? Object.entries(e.latent_dims).map(([k, v]) => `${k}=${v}`).join(' ') : null,
+      val_mean: e.f1_mean, val_std: e.f1_std, test_mean: e.test_f1_mean, n_runs: e.n_runs,
+    })) }] };
+  }
+  if (pf.kind === 'combo_tuned') {
+    return { groups: [{ name: '', entries: (d.top || []).map(e => mk({
+      label: (e.active_extractors || []).join('+') || '(none)',
+      extractors: e.active_extractors || [], variant: e.variant_label, hyper: fmtPhaseHyper(e),
+      val_mean: e.f1_mean, val_std: e.f1_std, test_mean: e.test_f1_mean, n_runs: e.n_runs,
+    })) }] };
+  }
+  if (pf.kind === 'fold_ranking') {
+    return { groups: [{ name: '', entries: (d.results || []).map(e => {
+      const c = e.config || {};
+      return mk({
+        label: e.entry_label, extractors: c.active_extractors || [],
+        variant: c.variant_label, hyper: fmtPhaseHyper(c),
+        val_mean: e.f1_mean, val_std: e.f1_std, val_min: e.f1_min, val_max: e.f1_max,
+        test_mean: e.test_f1_mean, test_std: e.test_f1_std, n_runs: e.n_runs, n_folds: e.n_folds,
+      });
+    }) }] };
+  }
+  // per_fold
+  return { groups: [{ name: '', entries: Object.entries(d.configs || {}).map(([label, v]) => {
+    const g = v.global || {}, c = v.config || {};
+    return mk({
+      label, extractors: v.active_extractors || c.active_extractors || [],
+      variant: c.variant_label, hyper: fmtPhaseHyper(c),
+      val_mean: g.f1_mean, val_std: g.f1_std, val_min: g.f1_min, val_max: g.f1_max,
+      test_mean: g.test_f1_mean, test_std: g.test_f1_std, n_runs: g.n_runs, n_folds: g.n_folds,
+      per_fold: Object.entries(v.per_fold || {})
+        .map(([f, s]) => ({ fold: Number(f), mean: s.mean, std: s.std, min: s.min, max: s.max }))
+        .sort((a, b) => a.fold - b.fold),
+    });
+  }) }] };
+}
+
+const PHASE_NOTE = {
+  branch_dims: 'One branch active at a time; ranks its VAE latent dim by validation F1 over 5 seeds. Solid = validation F1 (±std), dotted = test F1.',
+  branch_dims_single: 'context only, with Source & Domain identity switched off (dims = 0). Ranks the remaining latent dim.',
+  combo_ranking: 'All 15 on/off extractor combinations at default hyperparameters, one split, 5 seeds. Bars = validation F1 ± std; red diamonds = test F1.',
+  combo_tuned: 'The best of 18 hyperparameter variants per combination (Phase 3). "Detail" is the winning knob setting. Bars = validation F1 ± std; red diamonds = test F1.',
+  fold_ranking: 'Each combination re-run across 5 folds × 5 seeds. Bars = validation F1 ± std across folds; red diamonds = test F1; the table also shows the fold min–max.',
+  per_fold: 'Validation F1 per fold, one line per combination. Flat lines = stable ranking; crossing / jumpy lines = the result depends on which fold.',
+};
+
+function phaseSectionHtml(pf, i) {
+  const entries = phaseNormalize(pf).groups.flatMap(g => g.entries);
+  const hasFold = entries.some(e => e.n_folds);
+  const meta = [`metric: ${escapeHtml(pf.data.metric || 'f1')}`, `${entries.length} entries`];
+  if (pf.data.context_source_dim !== undefined) meta.push(`context Source dim ${pf.data.context_source_dim} · Domain dim ${pf.data.context_domain_dim}`);
+  if (pf.data.seeds !== undefined) meta.push(`${Array.isArray(pf.data.seeds) ? pf.data.seeds.length : pf.data.seeds} seeds`);
+
+  const cols = ['Label', 'Extractors', 'Detail', 'Val F1 (mean±std)', 'Test F1', hasFold ? 'folds×seeds' : 'n'];
+  const sorted = [...entries].sort((a, b) => (b.val_mean ?? -1) - (a.val_mean ?? -1));
+  const rows = sorted.map(e => {
+    const range = e.val_min != null ? ` <span style="color:var(--text-dim)">[${fmtNum(e.val_min, 3)}–${fmtNum(e.val_max, 3)}]</span>` : '';
+    const nCell = hasFold
+      ? (e.n_folds ? `${e.n_folds}×${Math.round((e.n_runs || 0) / e.n_folds)}` : '—')
+      : (e.n_runs ?? '—');
+    return `<tr>
+      <td>${escapeHtml(e.label)}</td>
+      <td>${extractorBadges(e.extractors)}</td>
+      <td>${escapeHtml(e.dim != null ? String(e.dim) : (e.hyper || e.variant || '—'))}</td>
+      <td>${fmtNum(e.val_mean)}${e.val_std != null ? ` ± ${fmtNum(e.val_std, 3)}` : ''}${range}</td>
+      <td>${fmtNum(e.test_mean)}${e.test_std != null ? ` ± ${fmtNum(e.test_std, 3)}` : ''}</td>
+      <td>${nCell}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="phase-card">
+    <h2>${escapeHtml(pf.title)}</h2>
+    <div class="phase-meta"><code>${escapeHtml(pf.fileName)}</code> · ${meta.join(' · ')}</div>
+    <p class="phase-note">${escapeHtml(PHASE_NOTE[pf.kind] || '')}</p>
+    <div class="chart-box"><div id="phasechart-${i}" style="height:${pf.kind === 'per_fold' ? 460 : 520}px;"></div></div>
+    <div class="table-scroll" style="max-height:none;"><table class="summary">
+      <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function phaseDimChart(id, groups) {
+  const traces = [];
+  groups.forEach((g, gi) => {
+    const es = [...g.entries].sort((a, b) => a.dim - b.dim);
+    const color = CHART_PALETTE[gi % CHART_PALETTE.length];
+    traces.push({
+      type: 'scatter', mode: 'lines+markers', name: `${g.name} · val`,
+      x: es.map(e => e.dim), y: es.map(e => e.val_mean),
+      error_y: { type: 'data', array: es.map(e => e.val_std || 0), visible: true },
+      line: { color }, marker: { color },
+      hovertemplate: '%{fullData.name}<br>dim %{x}: F1 %{y:.4f}<extra></extra>',
+    });
+    traces.push({
+      type: 'scatter', mode: 'lines+markers', name: `${g.name} · test`,
+      x: es.map(e => e.dim), y: es.map(e => e.test_mean),
+      line: { color, dash: 'dot' }, marker: { color, symbol: 'circle-open' },
+      hovertemplate: '%{fullData.name}<br>dim %{x}: F1 %{y:.4f}<extra></extra>',
+    });
+  });
+  Plotly.newPlot(id, traces, baseLayout({
+    margin: { l: 60, t: 10, r: 20, b: 50 },
+    xaxis: { title: 'VAE latent dim' }, yaxis: { title: 'F1' },
+  }), CHART_CFG);
+}
+
+function phaseRankBar(id, entries) {
+  const es = [...entries].sort((a, b) => (a.val_mean ?? -1) - (b.val_mean ?? -1));
+  const y = es.map(e => e.label);
+  Plotly.newPlot(id, [
+    {
+      type: 'bar', orientation: 'h', name: 'validation F1',
+      x: es.map(e => e.val_mean), y,
+      error_x: { type: 'data', array: es.map(e => e.val_std || 0), visible: true },
+      marker: { color: es.map(e => e.val_mean), colorscale: f1Colorscale(), cmin: 0, cmax: 1 },
+      hovertemplate: '%{y}<br>val F1 = %{x:.4f}<extra></extra>',
+    },
+    {
+      type: 'scatter', mode: 'markers', name: 'test F1',
+      x: es.map(e => e.test_mean), y,
+      marker: { symbol: 'diamond', size: 9, color: '#dc2626', line: { width: 0.5, color: '#fff' } },
+      hovertemplate: '%{y}<br>test F1 = %{x:.4f}<extra></extra>',
+    },
+  ], baseLayout({
+    margin: { l: 230, t: 10, r: 20, b: 40 }, barmode: 'overlay',
+    xaxis: { title: 'F1', range: [0, 1] }, yaxis: { automargin: true },
+    legend: { orientation: 'h', y: 1.05 },
+  }), CHART_CFG);
+}
+
+function phaseFoldChart(id, entries) {
+  const traces = entries.map((e, i) => ({
+    type: 'scatter', mode: 'lines+markers', name: e.label,
+    x: e.per_fold.map(f => f.fold), y: e.per_fold.map(f => f.mean),
+    line: { color: CHART_PALETTE[i % CHART_PALETTE.length] },
+    hovertemplate: `${escapeHtml(e.label)}<br>fold %{x}: F1 %{y:.4f}<extra></extra>`,
+  }));
+  Plotly.newPlot(id, traces, baseLayout({
+    margin: { l: 60, t: 10, r: 20, b: 50 },
+    xaxis: { title: 'fold', dtick: 1 }, yaxis: { title: 'validation F1 (mean over seeds)' },
+  }), CHART_CFG);
+}
+
+function phaseSectionCharts(pf, i) {
+  const id = 'phasechart-' + i;
+  const norm = phaseNormalize(pf);
+  if (pf.kind === 'branch_dims' || pf.kind === 'branch_dims_single') { phaseDimChart(id, norm.groups); return; }
+  if (pf.kind === 'per_fold') {
+    const es = norm.groups[0].entries.filter(e => e.per_fold && e.per_fold.length);
+    if (es.length) phaseFoldChart(id, es); else chartEmpty(id, 'No per-fold data in this file.');
+    return;
+  }
+  phaseRankBar(id, norm.groups[0].entries);
+}
+
+const PHASE_COMBO_KINDS = ['combo_ranking', 'combo_tuned', 'fold_ranking', 'per_fold'];
+
+function renderPhaseCross() {
+  const sec = document.getElementById('phase-cross');
+  const comboFiles = phaseFiles.filter(pf => PHASE_COMBO_KINDS.includes(pf.kind));
+  if (comboFiles.length < 2) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  comboFiles.sort((a, b) => ((a.phaseNum ?? 99) - (b.phaseNum ?? 99))
+    || String(a.stage).localeCompare(String(b.stage)));
+  const colLabels = comboFiles.map(pf =>
+    `P${pf.phaseNum ?? '?'}${pf.stage ? ' ' + pf.stage.replace('Stage ', '') : ''}${pf.kind === 'per_fold' ? ' fold' : ''}`);
+  const useTest = document.getElementById('phase-cross-test').checked;
+
+  const byCombo = {};
+  comboFiles.forEach((pf, ci) => {
+    phaseNormalize(pf).groups[0].entries.forEach(e => {
+      const key = [...e.extractors].sort().join('+') || '(none)';
+      (byCombo[key] = byCombo[key] || Array(comboFiles.length).fill(null))[ci] = useTest ? e.test_mean : e.val_mean;
+    });
+  });
+  const combos = Object.keys(byCombo)
+    .filter(k => byCombo[k].filter(v => v != null).length >= 2)
+    .sort((a, b) => a.split('+').length - b.split('+').length || a.localeCompare(b));
+
+  if (!combos.length) { chartEmpty('phase-cross-chart', 'No combination appears in two or more of the loaded phase files.'); return; }
+
+  const traces = combos.map((k, i) => ({
+    type: 'scatter', mode: 'lines+markers', name: k, connectgaps: true,
+    x: colLabels, y: byCombo[k],
+    line: { color: CHART_PALETTE[i % CHART_PALETTE.length] },
+    hovertemplate: `${escapeHtml(k)}<br>%{x}: F1 %{y:.4f}<extra></extra>`,
+  }));
+  Plotly.newPlot('phase-cross-chart', traces, baseLayout({
+    margin: { l: 60, t: 10, r: 20, b: 60 },
+    xaxis: { title: 'phase stage' },
+    yaxis: { title: `${useTest ? 'test' : 'validation'} F1 (mean)`, range: [0, 1] },
+  }), CHART_CFG);
+}
+
+function renderPhaseView() {
+  const emptyEl = document.getElementById('phase-empty');
+  const sectionsEl = document.getElementById('phase-sections');
+  const narrEl = document.getElementById('phase-narrative-list');
+
+  if (!phaseFiles.length) {
+    emptyEl.hidden = false;
+    sectionsEl.innerHTML = '';
+    narrEl.innerHTML = '';
+    document.getElementById('phase-cross').hidden = true;
+    return;
+  }
+  emptyEl.hidden = true;
+
+  narrEl.innerHTML = phaseFiles.map(pf => {
+    const n = phaseNormalize(pf).groups.reduce((s, g) => s + g.entries.length, 0);
+    return `<li><code>${escapeHtml(pf.fileName)}</code> — ${escapeHtml(pf.title)} · ${n} entr${n === 1 ? 'y' : 'ies'}</li>`;
+  }).join('');
+
+  sectionsEl.innerHTML = phaseFiles.map((pf, i) => phaseSectionHtml(pf, i)).join('');
+  phaseFiles.forEach((pf, i) => phaseSectionCharts(pf, i));
+  renderPhaseCross();
+}
+
+function updatePhaseTab() {
+  const badge = document.getElementById('maintab-phases-count');
+  badge.textContent = phaseFiles.length ? ` (${phaseFiles.length})` : '';
+  document.getElementById('maintab-phases').disabled = !phaseFiles.length;
+}
+
+function setMainView(view) {
+  mainView = view;
+  document.getElementById('view-runs').hidden = view !== 'runs';
+  document.getElementById('view-phases').hidden = view !== 'phases';
+  document.getElementById('maintab-runs').classList.toggle('primary', view === 'runs');
+  document.getElementById('maintab-phases').classList.toggle('primary', view === 'phases');
+  if (view === 'phases') renderPhaseView();
+  // Plotly plots sized while their container was hidden come back at the wrong
+  // width; a resize event makes every responsive plot re-fit the now-visible tab.
+  requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+}
+
+document.getElementById('maintab-runs').addEventListener('click', () => setMainView('runs'));
+document.getElementById('maintab-phases').addEventListener('click', () => {
+  if (phaseFiles.length) setMainView('phases');
+});
+document.getElementById('phase-cross-test').addEventListener('change', renderPhaseCross);
 
 function renderAll() {
   renderNarrative();

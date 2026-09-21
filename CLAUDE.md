@@ -38,6 +38,8 @@ Per-branch VAE latent dims and KAN hyperparameters are configurable via flags (`
 
 Each `--train_kan` run writes a JSON record to `results/` (active extractors, latent dims, epochs, hyperparams, full metrics, git commit, a snapshot of the KAN checkpoint) via `src/experiments/run_logger.py`. Run `python scripts/report_builder.py` to compile all `results/*.json` into `reports/experiments_summary.csv`, an extractor-combo heatmap, and per-run weight histograms.
 
+The full evaluation is driven by a 3-phase plan of orchestrators over `main.py` (`scripts/orchestrator_phase{1,2,3}.py`, shared config in `scripts/experiment_config.py` / `scripts/experiment_plan.py`, mechanics in `scripts/experiment_runner.py`): **Phase 1** sweeps only the `context` VAE latent dim, per identity mode (Source/Domain ON vs. OFF); **Phase 2** evaluates all 15 extractor combos (the 8 with `context` doubled for identity ON/OFF) × `kan_hidden_dim` ∈ {32,64} × 3 seeds on the standard split; **Phase 3** repeats those 23 combo-variants across 5 source-disjoint folds. All other VAE/KAN hyperparameters are fixed in `FINAL_HPARAMS` (an old 1350-run sweep found nothing beating `main.py`'s defaults by more than seed noise). 27 + 138 + 690 = 855 runs. Full guide: `scripts/README_experiments.md`. The previous 6-phase plan and its ~2480 run records are in `results_old_3/` (gitignored).
+
 Standalone inspection utilities live in `scripts/` (e.g. `inspect_pkl.py` for deep PKL inspection, `pca_latent_dim_suggester.py` for choosing VAE latent dims from explained variance, `peek_pkl_row.py --pkl <path> --row <i>` for a quick single-row peek).
 
 ## Architecture
@@ -70,3 +72,13 @@ raw xlsx -> 01_corpus_pkl -> 02_corpus_clean (text_xlmr)
 - Extractor logging: `get_logger(log_dir, name)` writes console + a timestamped file `{log_dir}/{name}_{YYYY-MM-DD_HH-MM-SS}.log` (see `logs/features/*`, `logs/prepare_corpus/*`). Follow this pattern for any new extractor/stage.
 - Feature PKL naming: `data/03_features_raw/{branch}/{split}_{branch}.pkl`; VAE latent PKLs at `data/05_vae_latents/{branch}/latent{dim}/{split}.pkl`; VAE model checkpoints at `models/vae/{branch}/latent{dim}/` (only the dim matching `main.py`'s current default is kept — `semantic=128, emotion=16, style=16, context=64` — stale sweep dirs get pruned).
 - `.gitignore` excludes `*.pkl`, `*.npy`, `*.pt`, and (typo) `*.hi5` — this does **not** match `*.h5`, so VAE `.weights.h5` files and `.keras`/xlsx model artifacts end up tracked in git (visible as modified in `git status` after every VAE/KAN run). Be aware of this when committing — don't assume model binaries are gitignored.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
