@@ -36,3 +36,7 @@ data/06_vae_latents_merged*/
 data/07_kan_runs*/
 models/vae*/
 paper/
+# Local-only data and backups (not versioned)
+data/_stale_*/
+data/raw/Downloaded/
+results_backup_*.tar.gz
