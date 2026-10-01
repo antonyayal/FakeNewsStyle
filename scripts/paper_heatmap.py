@@ -31,7 +31,7 @@ from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PHASE2_JSONL = BASE_DIR / "results" / "orchestrator_phase2.jsonl"
-DEFAULT_EN_OUT = BASE_DIR / "paper" / "Articulo_Antonio_Ayala_26" / "figures" / "Heatmap.png"
+DEFAULT_EN_OUT = BASE_DIR.parent / "FakeNewsStyle-paper" / "figures" / "Heatmap.png"
 DEFAULT_ES_OUT = BASE_DIR.parent / "Tesis_Doctorado" / "figures" / "Heatmap_es.png"
 
 METRICS = ["accuracy", "f1", "roc_auc", "log_loss"]
