@@ -17,8 +17,12 @@ Outputs
 For each input PKL (train/val/test), creates an output PKL with:
 - Id (if exists)
 - label (if exists)
-- emo_probs : list[float] (sorted by class name)
-- sent_probs: list[float] (sorted by class name)
+- emo_probs : list[float] (sorted by class name; with chunking, the
+              token-weighted mean over sentence-aligned chunks)
+- sent_probs: list[float] (sorted by class name; same aggregation)
+- emo_probs_max / sent_probs_max : list[float], only with
+              aggregation="mean_max" -- per-class max over chunks
+- chunking / chunk_max_tokens / aggregation : config used (strings)
 - emo_labels: list[str]
 - sent_labels: list[str]
 - signals  : list[float]
@@ -161,6 +165,87 @@ class ExtractConfig:
     safe_numeric: bool = True
 
     intensifiers: Optional[set] = None
+
+    # Long-text handling. The pysentimiento (RoBERTuito) models truncate their
+    # input to 128 tokens, so without chunking only the headline + first
+    # paragraph of a news article is seen.
+    #   "none"      : one prediction per article (original behavior, truncated).
+    #   "sentences" : split the article into sentence-aligned chunks of at most
+    #                 chunk_max_tokens RoBERTuito tokens, predict each chunk,
+    #                 and aggregate per article (covers the whole text).
+    chunking: str = "sentences"
+    chunk_max_tokens: int = 128
+
+    # Chunk aggregation (only meaningful with chunking="sentences"):
+    #   "mean"     : token-length-weighted mean of chunk probabilities
+    #                -> emo_probs (7) + sent_probs (3); vector stays 23-dim.
+    #   "mean_max" : the mean above PLUS the per-class max over chunks
+    #                -> extra emo_probs_max (7) + sent_probs_max (3); 33-dim.
+    aggregation: str = "mean"
+
+
+# =====================================================
+# Chunking (sentence-aligned, token-budgeted)
+# =====================================================
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+|\n+")
+
+
+def _chunk_text(
+    text: str,
+    tokenizer: Any,
+    preprocessing_args: Dict[str, Any],
+    max_tokens: int,
+) -> tuple[List[str], List[int]]:
+    """
+    Split text into sentence-aligned chunks that fit the model window.
+
+    Tokens are counted exactly as pysentimiento does at predict time
+    (preprocess_tweet + the analyzer's own tokenizer), leaving room for the
+    2 special tokens. Sentences are packed greedily; a single sentence longer
+    than the budget is split on word boundaries instead of being truncated.
+
+    Returns (chunks, token_counts); token_counts are used as aggregation weights.
+    """
+    budget = max(int(max_tokens) - 2, 1)
+
+    def ntok(s: str) -> int:
+        return len(tokenizer.encode(preprocess_tweet(s, **preprocessing_args), add_special_tokens=False))
+
+    sents = [s.strip() for s in _SENT_SPLIT_RE.split(text or "") if s and s.strip()]
+    if not sents:
+        return [text or ""], [1]
+
+    # 1) sentence pieces, each within budget (long sentences split by words)
+    pieces: List[str] = []
+    for s in sents:
+        if ntok(s) <= budget:
+            pieces.append(s)
+            continue
+        cur: List[str] = []
+        for w in s.split():
+            if cur and ntok(" ".join(cur + [w])) > budget:
+                pieces.append(" ".join(cur))
+                cur = [w]
+            else:
+                cur.append(w)
+        if cur:
+            pieces.append(" ".join(cur))
+
+    # 2) greedy packing of consecutive pieces into chunks
+    chunks: List[str] = []
+    cur_text = ""
+    for p in pieces:
+        cand = f"{cur_text} {p}" if cur_text else p
+        if cur_text and ntok(cand) > budget:
+            chunks.append(cur_text)
+            cur_text = p
+        else:
+            cur_text = cand
+    if cur_text:
+        chunks.append(cur_text)
+
+    counts = [max(ntok(c), 1) for c in chunks]
+    return chunks, counts
 
 
 # =====================================================
@@ -409,7 +494,38 @@ def extract_emotion_features(
     if cfg.use_preprocess_tweet:
         texts = [preprocess_tweet(t, lang=cfg.lang) for t in texts]
 
-    logger.info(f"Extracting emotion/sentiment: N={len(texts)} | batch_size={cfg.batch_size} | device={device}")
+    if cfg.chunking not in {"none", "sentences"}:
+        raise ValueError(f"Unknown chunking '{cfg.chunking}' (use 'none' or 'sentences').")
+    if cfg.aggregation not in {"mean", "mean_max"}:
+        raise ValueError(f"Unknown aggregation '{cfg.aggregation}' (use 'mean' or 'mean_max').")
+    if cfg.aggregation == "mean_max" and cfg.chunking == "none":
+        raise ValueError("aggregation='mean_max' requires chunking='sentences' (max == mean with one chunk).")
+
+    # Model inputs: one text per article, or several chunks per article.
+    # doc_index[k] = article that model input k belongs to; weights = token counts.
+    if cfg.chunking == "sentences":
+        model_inputs: List[str] = []
+        doc_index: List[int] = []
+        weights: List[int] = []
+        for i, t in enumerate(texts):
+            chunks, counts = _chunk_text(
+                t, emo_an.tokenizer, getattr(emo_an, "preprocessing_args", {}) or {}, cfg.chunk_max_tokens
+            )
+            model_inputs.extend(chunks)
+            doc_index.extend([i] * len(chunks))
+            weights.extend(counts)
+        n_chunks = np.bincount(np.asarray(doc_index), minlength=len(texts))
+        logger.info(
+            f"Chunking: {len(model_inputs)} chunks for {len(texts)} articles | "
+            f"max_tokens={cfg.chunk_max_tokens} | chunks/article mean={n_chunks.mean():.2f} "
+            f"median={np.median(n_chunks):.0f} max={n_chunks.max()} | aggregation={cfg.aggregation}"
+        )
+    else:
+        model_inputs = texts
+        doc_index = list(range(len(texts)))
+        weights = [1] * len(texts)
+
+    logger.info(f"Extracting emotion/sentiment: N={len(model_inputs)} model inputs | batch_size={cfg.batch_size} | device={device}")
 
     # Inference mode (avoid autograd overhead)
     if torch is not None and hasattr(torch, "inference_mode"):
@@ -421,20 +537,44 @@ def extract_emotion_features(
 
     if ctx is not None:
         with ctx:
-            emo_preds = _predict_many(emo_an, texts, cfg.batch_size, logger)
-            sent_preds = _predict_many(sent_an, texts, cfg.batch_size, logger)
+            emo_preds = _predict_many(emo_an, model_inputs, cfg.batch_size, logger)
+            sent_preds = _predict_many(sent_an, model_inputs, cfg.batch_size, logger)
     else:
-        emo_preds = _predict_many(emo_an, texts, cfg.batch_size, logger)
-        sent_preds = _predict_many(sent_an, texts, cfg.batch_size, logger)
+        emo_preds = _predict_many(emo_an, model_inputs, cfg.batch_size, logger)
+        sent_preds = _predict_many(sent_an, model_inputs, cfg.batch_size, logger)
 
     if not emo_preds or not sent_preds:
         raise RuntimeError("No predictions returned by analyzers.")
+    if len(emo_preds) != len(model_inputs) or len(sent_preds) != len(model_inputs):
+        raise RuntimeError("Analyzer returned a different number of predictions than inputs.")
 
     emo_labels = _sorted_proba_keys(emo_preds[0].probas)
     sent_labels = _sorted_proba_keys(sent_preds[0].probas)
 
-    emo_mat = np.vstack([_probas_to_vec(p.probas, emo_labels) for p in emo_preds]).astype(np.float32)
-    sent_mat = np.vstack([_probas_to_vec(p.probas, sent_labels) for p in sent_preds]).astype(np.float32)
+    emo_in = np.vstack([_probas_to_vec(p.probas, emo_labels) for p in emo_preds]).astype(np.float32)
+    sent_in = np.vstack([_probas_to_vec(p.probas, sent_labels) for p in sent_preds]).astype(np.float32)
+
+    # Aggregate model inputs back to one row per article.
+    idx = np.asarray(doc_index)
+    w = np.asarray(weights, dtype=np.float64)[:, None]
+    n_docs = len(texts)
+
+    def _weighted_mean(m: np.ndarray) -> np.ndarray:
+        num = np.zeros((n_docs, m.shape[1]), dtype=np.float64)
+        np.add.at(num, idx, m * w)
+        den = np.zeros((n_docs, 1), dtype=np.float64)
+        np.add.at(den, idx, w)
+        return (num / np.maximum(den, 1e-12)).astype(np.float32)
+
+    def _max(m: np.ndarray) -> np.ndarray:
+        out = np.full((n_docs, m.shape[1]), -np.inf, dtype=np.float32)
+        np.maximum.at(out, idx, m)
+        return out
+
+    emo_mat = _weighted_mean(emo_in)
+    sent_mat = _weighted_mean(sent_in)
+    emo_max_mat = _max(emo_in) if cfg.aggregation == "mean_max" else None
+    sent_max_mat = _max(sent_in) if cfg.aggregation == "mean_max" else None
 
     sig_mat = np.vstack(
         [
@@ -451,12 +591,20 @@ def extract_emotion_features(
     emo_mat = _safe(emo_mat, cfg.safe_numeric)
     sent_mat = _safe(sent_mat, cfg.safe_numeric)
     sig_mat = _safe(sig_mat, cfg.safe_numeric)
+    if emo_max_mat is not None:
+        emo_max_mat = _safe(emo_max_mat, cfg.safe_numeric)
+        sent_max_mat = _safe(sent_max_mat, cfg.safe_numeric)
 
     return {
         "emo_labels": emo_labels,
         "sent_labels": sent_labels,
         "emo_mat": emo_mat,
         "sent_mat": sent_mat,
+        "emo_max_mat": emo_max_mat,
+        "sent_max_mat": sent_max_mat,
+        "chunking": cfg.chunking,
+        "chunk_max_tokens": cfg.chunk_max_tokens,
+        "aggregation": cfg.aggregation,
         "sig_mat": sig_mat,
         "signal_names": signal_feature_names(cfg.extra_signals),
         "device": device,
@@ -514,6 +662,13 @@ def _save_features_pkl(
     out_df["sent_probs"] = [sent_mat[i].tolist() for i in range(sent_mat.shape[0])]
     out_df["signals"] = [sig_mat[i].tolist() for i in range(sig_mat.shape[0])]
 
+    # aggregation="mean_max": per-class max over chunks, next to the means above
+    if payload.get("emo_max_mat") is not None:
+        emo_max: np.ndarray = payload["emo_max_mat"]
+        sent_max: np.ndarray = payload["sent_max_mat"]
+        out_df["emo_probs_max"] = [emo_max[i].tolist() for i in range(emo_max.shape[0])]
+        out_df["sent_probs_max"] = [sent_max[i].tolist() for i in range(sent_max.shape[0])]
+
     # Metadata columns (stable per file)
     out_df["emo_labels"] = [payload["emo_labels"]] * len(out_df)
     out_df["sent_labels"] = [payload["sent_labels"]] * len(out_df)
@@ -523,6 +678,10 @@ def _save_features_pkl(
     out_df["batch_size"] = payload["batch_size"]
     out_df["normalize_signals_by"] = payload["normalize_signals_by"]
     out_df["use_preprocess_tweet"] = payload["use_preprocess_tweet"]
+    # stored as strings so merge_raw_features_for_kan doesn't treat them as numeric features
+    out_df["chunking"] = str(payload["chunking"])
+    out_df["chunk_max_tokens"] = str(payload["chunk_max_tokens"])
+    out_df["aggregation"] = str(payload["aggregation"])
 
     output_pkl.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_pickle(output_pkl)
@@ -544,6 +703,9 @@ def extract_emotion_features_for_splits(
     use_preprocess_tweet: bool = False,
     normalize_signals_by: str = "chars",
     extra_signals: bool = True,
+    chunking: str = "sentences",
+    chunk_max_tokens: int = 128,
+    aggregation: str = "mean",
 ) -> None:
     """
     Extract and save emotion features for train/val/test splits.
@@ -569,6 +731,9 @@ def extract_emotion_features_for_splits(
         extra_signals=extra_signals,
         safe_numeric=True,
         intensifiers=None,
+        chunking=chunking,
+        chunk_max_tokens=int(chunk_max_tokens),
+        aggregation=aggregation,
     )
 
     try:

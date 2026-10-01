@@ -47,6 +47,7 @@ from experiment_config import (  # noqa: E402
     ALL_MODALITIES,
     BASE_DIR,
     DEFAULT_LATENT_DIM,
+    EXTRACT_DEVICE,
     KAN_RUNS_DIR,
     PHASE3_MERGED_DIR,
     PHASE3_PER_FOLD_JSON,
@@ -126,6 +127,7 @@ def prepare_fold(unit: Dict[str, Any], fold_idx: int, dry_run: bool) -> Dict[str
             for b in ALL_MODALITIES:
                 cmd.append(f"--extract_{b}" if b in shared else f"--exclude_{b}")
                 cmd += [f"--{b}_latent_dim", str(latent_dims.get(b, DEFAULT_LATENT_DIM[b]))]
+            cmd += ["--semantic_device", EXTRACT_DEVICE, "--emotion_device", EXTRACT_DEVICE]
             cmd += ["--run_vaes", "--vae_beta", "1.0", "--vae_dropout", "0.1"]
             print(f"  fold {fold_idx} [{unit['prep_label']}]: preparing {shared} (shared source_cv cache)")
             print(f"    $ {' '.join(cmd)}")

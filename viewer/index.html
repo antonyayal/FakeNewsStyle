@@ -276,10 +276,18 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
         <button class="btn" id="tab-metrics" type="button">Metrics</button>
       </div>
       <input type="text" id="table-filter" placeholder="Filter by run_id, extractors, or file...">
-      <label class="ctx-id-filter">Context S/D:
+      <label class="ctx-id-filter">Context identity:
         <label><input type="checkbox" class="ctx-id-chk" value="on" checked> identity on</label>
         <label><input type="checkbox" class="ctx-id-chk" value="off" checked> identity off</label>
         <label><input type="checkbox" class="ctx-id-chk" value="na" checked> context not used</label>
+      </label>
+      <label class="phase-filter" data-tooltip="Which experiment phases feed every chart and table below. Phase 2 alone (standard split, fixed hyperparameters, 3 seeds) is what Tables 2/3 and the paper's heatmap figure report — the other phases answer different questions (dimension sweeps, source-disjoint folds, a deliberately smaller/worse hyperparameter recipe) and mixing them into the same combination cell produces averages that do not correspond to any single experiment. Uncheck everything except Phase 2 for a paper-matching view; check everything for open-ended exploration.">Phase:
+        <label><input type="checkbox" class="phase-chk" value="phase1" checked> 1 (context dim)</label>
+        <label><input type="checkbox" class="phase-chk" value="phase1b" checked> 1b (branch dim)</label>
+        <label><input type="checkbox" class="phase-chk" value="phase2" checked> 2 (standard split)</label>
+        <label><input type="checkbox" class="phase-chk" value="phase3" checked> 3 (source-disjoint)</label>
+        <label><input type="checkbox" class="phase-chk" value="phase3b_recipecmp" checked> 3b (recipe check)</label>
+        <label><input type="checkbox" class="phase-chk" value="other" checked> other</label>
       </label>
       <label class="f1-floor-filter"><input type="checkbox" id="f1-floor-chk"> Test F1 &gt; 0.6 only</label>
       <span id="ctrl-count" class="ctrl-count"></span>
@@ -298,7 +306,7 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
   </section>
 
   <section id="charts-b">
-    <h2 data-tooltip="Two heatmaps: rows = extractor combinations, columns = accuracy / F1 / ROC-AUC / log-loss on test. Top = max over that combination’s runs (rows sorted by max F1). Bottom = mean over the runs (±sd shown as text, rows sorted by mean F1). Cell hover shows the run count for that combination.">Extractor combinations vs. test metrics</h2>
+    <h2 data-tooltip="Two heatmaps: rows = extractor combinations, split into identity on / identity off whenever context is part of the combo. Top = raw exploration view, max over that row's runs, columns are test accuracy / F1 / ROC-AUC / log-loss, rows sorted by max test F1. Bottom = the paper's protocol, mean over the row's runs (±sd shown as text), same test-metric columns as the top heatmap, rows sorted by mean test F1. Cell hover shows the run count for that row.">Extractor combinations vs. test metrics</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart-max" style="height:460px;"></div></div></div>
     <div class="chart-grid full"><div class="chart-box"><div id="heatmap-chart" style="height:460px;"></div></div></div>
   </section>
@@ -358,11 +366,11 @@ footer { margin-top: 50px; color: var(--text-dim); font-size: 0.8rem; text-align
 
   <section id="charts-m">
     <h2 data-tooltip="Grouped bars: x = news topic (Politics, Covid-19, …), one bar per extractor combination, y = mean per-topic test F1 across runs. Hover shows the approximate article count per topic.">Per-topic test F1 by extractor combination</h2>
-    <div class="chart-grid full"><div class="chart-box"><div id="topic-breakdown-chart" style="height:480px;"></div></div></div>
+    <div class="chart-grid full"><div class="chart-box"><div id="domain-breakdown-chart" style="height:480px;"></div></div></div>
   </section>
 
   <section id="charts-n">
-    <h2 data-tooltip="Scatter of test precision vs. recall, one point per run, colored by extractor combination. Dotted curves are lines of constant F1 (0.5–0.9).">Precision vs. recall (test) — iso-F1 contours</h2>
+    <h2 data-tooltip="Scatter of test precision vs. recall, one point per run, colored by extractor combination. Dotted curves are lines of constant Fake-class F1 (0.5–0.9); this chart is per-class, unlike the macro-F1 used elsewhere.">Precision vs. recall (test, Fake class) — iso-F1 contours</h2>
     <div class="chart-grid full"><div class="chart-box"><div id="precision-recall-chart" style="height:480px;"></div></div></div>
   </section>
 
@@ -467,22 +475,49 @@ let excludedEntries = [];
 let phaseFiles = [];
 let mainView = 'runs';
 let filterText = '';
-// Which context Source/Domain identity states to show. This filter is global:
+// Which context Source Name/Source Link identity states to show. This filter is global:
 // it drives both the summary table and every chart (renderAll works off
 // shownRuns, not allRuns).
 let ctxIdentityShow = { on: true, off: true, na: true };
 
+// Which experiment phase produced a run, inferred from its kan_output_dir
+// (each orchestrator writes into data/07_kan_runs/{phase}/...). Longer/more
+// specific markers are checked first so "phase1b" and "phase3b_recipecmp"
+// don't get misread as "phase1"/"phase3". Falls back to 'other' for loose
+// ad-hoc runs (e.g. old pre-3-phase-plan sweeps) that carry no such marker.
+const PHASE_MARKERS = ['phase1b', 'phase3b_recipecmp', 'phase1', 'phase2', 'phase3'];
+function inferPhase(kanOutputDir) {
+  const s = kanOutputDir || '';
+  for (const p of PHASE_MARKERS) {
+    if (s.includes(`/${p}/`) || s.includes(`${p}/`)) return p;
+  }
+  return 'other';
+}
+
+// Which phases feed every chart/table. Phase 2 alone (standard split, fixed
+// hyperparameters, 3 seeds) is what the paper's tables and heatmap figure
+// report; the rest answer different questions (dimension sweeps,
+// source-disjoint folds, a deliberately worse recipe) and averaging them
+// into the same combination cell as Phase 2 does not correspond to any one
+// experiment. See the "Phase" filter's tooltip.
+let phaseShow = { phase1: true, phase1b: true, phase2: true, phase3: true, phase3b_recipecmp: true, other: true };
+
 // allRuns = everything loaded from the JSON files; shownRuns = allRuns after the
-// global context-identity filter. Every narrative/table/chart renderer reads
-// shownRuns; only load bookkeeping and the "N loaded" header read allRuns.
+// global context-identity and phase filters. Every narrative/table/chart
+// renderer reads shownRuns; only load bookkeeping and the "N loaded" header
+// read allRuns.
 let shownRuns = [];
 
 function passesCtxIdentity(r) {
   if (ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na) return true;
   const rank = contextIdentityRank(r);
   if (rank === -2) return ctxIdentityShow.na;   // context branch not used
-  if (rank === 0) return ctxIdentityShow.off;   // Source and Domain both off
-  return ctxIdentityShow.on;                    // Source and/or Domain on
+  if (rank === 0) return ctxIdentityShow.off;   // Source Name and Source Link both off
+  return ctxIdentityShow.on;                    // Source Name and/or Source Link on
+}
+
+function passesPhase(r) {
+  return !!phaseShow[r.phase || 'other'];
 }
 
 // Global "only strong runs" toggle: keep runs whose test F1 clears 0.6.
@@ -494,7 +529,7 @@ function passesF1Floor(r) {
 }
 
 function recomputeShownRuns() {
-  shownRuns = allRuns.filter(r => passesCtxIdentity(r) && passesF1Floor(r));
+  shownRuns = allRuns.filter(r => passesCtxIdentity(r) && passesPhase(r) && passesF1Floor(r));
   updateControlCount();
 }
 
@@ -520,8 +555,35 @@ const KNOWN_MODALITIES = new Set(['semantic', 'emotion', 'style', 'context']);
 // written by src/experiments/run_logger.py) -> flat object for rendering.
 // Mirrors flatten_record() in scripts/html_report_builder.py.
 // =====================================================
+
+// "f1" is macro-F1 (Fake/Real) since 2026-09-29, with the Fake-class F1 kept as
+// "f1_fake" (src/evaluation/metrics.py). Records written before that and not
+// migrated (e.g. results_old*/) still hold the Fake-class F1 under "f1", so
+// convert them here from the confusion matrix; otherwise both metrics would be
+// plotted and ranked together as one.
+function toMacroF1(m) {
+  if (!m || typeof m !== 'object' || 'f1_fake' in m || typeof m.f1 !== 'number') return m;
+  const { tn, fp, fn, tp } = m;
+  if (![tn, fp, fn, tp].every(v => typeof v === 'number')) return m;
+  const fFake = tp ? 2 * tp / (2 * tp + fp + fn) : 0;
+  const fReal = tn ? 2 * tn / (2 * tn + fn + fp) : 0;
+  return { ...m, f1: (fFake + fReal) / 2, f1_fake: m.f1 };
+}
+function normalizeF1Metrics(metrics) {
+  const out = { ...metrics };
+  for (const split of ['train', 'val', 'test']) out[split] = toMacroF1(metrics[split]);
+  return out;
+}
+// Legacy per-domain entries only store n/accuracy/Fake-class f1 (no confusion
+// matrix), so they cannot be converted; drop them rather than mix metrics.
+function macroDomainBreakdown(db) {
+  if (!db || typeof db !== 'object') return null;
+  const entries = Object.values(db);
+  return entries.length && entries.every(e => e && 'f1_fake' in e) ? db : null;
+}
+
 function flattenRecord(record, sourceLabel) {
-  const metrics = record.metrics || {};
+  const metrics = normalizeF1Metrics(record.metrics || {});
   const test = metrics.test || {};
   const train = metrics.train || {};
   const epochs = record.epochs || {};
@@ -539,11 +601,12 @@ function flattenRecord(record, sourceLabel) {
     corpus_fold: corpus.fold,
     corpus_mode: corpus.mode,
     latent_dims: record.latent_dims || {},
-    // { source, domain } hash-embedding widths of the context branch; 0 = that
-    // identity field was switched off. null when the record predates this field
-    // (added 2026-09-10) or context was excluded from the run.
+    // { source_name, source_link } hash-embedding widths of the context branch;
+    // 0 = that identity field was switched off. null when the record predates
+    // this field (added 2026-09-10) or context was excluded from the run.
     context_dims: (record.context_dims && typeof record.context_dims === 'object') ? record.context_dims : null,
     kan_output_dir: (record.paths || {}).kan_output_dir || '',
+    phase: inferPhase((record.paths || {}).kan_output_dir || ''),
     epochs: { kan_epochs_run: epochs.kan_epochs_run ?? null, kan_epochs_requested: epochs.kan_epochs_requested ?? null,
               vae_epochs_requested: epochs.vae_epochs_requested ?? null },
     vae_hyperparams: record.vae_hyperparams || {},
@@ -560,7 +623,7 @@ function flattenRecord(record, sourceLabel) {
     training_time_seconds: compute.training_time_seconds ?? null,
     num_parameters: compute.num_parameters ?? null,
     dataset_hash: record.dataset_hash ?? null,
-    topic_breakdown: record.topic_breakdown ?? null,
+    domain_breakdown: macroDomainBreakdown(record.domain_breakdown),
     source_file: sourceLabel,
   };
 }
@@ -695,7 +758,11 @@ function updateHeaderMeta() {
   const excludedNote = excludedEntries.length
     ? `<span style="color:var(--warn)">${excludedEntries.length} file(s) skipped</span>` : '';
   const activeFilters = [];
-  if (!(ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na)) activeFilters.push('Context S/D');
+  if (!(ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na)) activeFilters.push('Context Source Name/Link');
+  if (!Object.values(phaseShow).every(Boolean)) {
+    const kept = Object.entries(phaseShow).filter(([, v]) => v).map(([k]) => k);
+    activeFilters.push('Phase: ' + (kept.length ? kept.join(', ') : 'none'));
+  }
   if (f1FloorOn) activeFilters.push('F1 > ' + F1_FLOOR);
   const filteredNote = shownRuns.length !== allRuns.length
     ? `<span style="color:var(--accent)">${shownRuns.length} shown (${activeFilters.join(' + ') || 'filtered'})</span>` : '';
@@ -885,24 +952,48 @@ function fmtLatentDims(ld) {
   return Object.entries(ld).map(([k, v]) => `<span style="color:var(--text-dim)">${escapeHtml(k)}</span>=${v}`).join(', ');
 }
 
-// Whether the context branch's Source / Domain identity fields were on (dim > 0)
-// or off (dim = 0, the identity-free control of Phase 6). When the run record
-// doesn't carry context_dims (added 2026-09-10), infer it: Phase 6 is the only
-// protocol that zeroes them, so a phase6 output path -> off, anything else ->
-// the 32/32 CLI default -> on. Inferred cells are marked with a trailing *.
+// Whether the context branch's Source Name / Source Link identity fields
+// were on or off. Priority order, most reliable first:
+//   1. A ctxon/ctxoff marker in kan_output_dir. Every current orchestrator
+//      (Phase 1/2/3/3b) names its output directory after the identity mode
+//      it built ("ctxon"/"ctxoff", as a path segment or inside a combo
+//      label like "..._context__ctxoff__hd32"), so this reflects what the
+//      run actually trained on.
+//   2. context_dims, ONLY if no marker was found. This field is NOT
+//      reliable on its own: main.py's --train_kan step logs it from
+//      args.context_source_name_dim/args.context_source_link_dim, which are
+//      just the CLI defaults (32/32) whenever --train_kan is invoked
+//      without those flags (i.e. every orchestrator run, since --train_kan
+//      reads already-merged latent PKLs and never re-specifies them) --
+//      so it reads "on" even for identity-off runs. Confirmed by
+//      cross-checking Phase 2's own context-alone runs: some report
+//      context_dims={source_name:32,...} with test F1 ~0.46 (the known
+//      identity-off range), which is only possible if this field does not
+//      track the run's actual identity mode.
+//   3. A phase6 output-path heuristic, for older records with neither of
+//      the above (Phase 6 was the only protocol that zeroed these fields
+//      the CLI-honest way, before the ctxon/ctxoff naming convention).
+// Cells from (1) or (2) are exact; cells from (3) are marked with a
+// trailing * since they are inferred, not read from the record.
 function contextIdentityBools(r) {
+  const kod = r.kan_output_dir || '';
+  const isOff = /(?:^|[_/])ctxoff(?:[_/]|$)/.test(kod);
+  const isOn = /(?:^|[_/])ctxon(?:[_/]|$)/.test(kod);
+  if (isOff || isOn) {
+    return { sourceName: isOn, sourceLink: isOn, srcNameDim: null, srcLinkDim: null, assumed: false };
+  }
   const cd = r.context_dims;
   if (cd) {
-    return { source: Number(cd.source) > 0, domain: Number(cd.domain) > 0,
-             srcDim: cd.source, domDim: cd.domain, assumed: false };
+    return { sourceName: Number(cd.source_name) > 0, sourceLink: Number(cd.source_link) > 0,
+             srcNameDim: cd.source_name, srcLinkDim: cd.source_link, assumed: false };
   }
-  const isPhase6 = /(^|[/_])phase6([/_]|$)/.test(r.kan_output_dir || '');
-  return { source: !isPhase6, domain: !isPhase6, srcDim: null, domDim: null, assumed: true };
+  const isPhase6 = /(^|[/_])phase6([/_]|$)/.test(kod);
+  return { sourceName: !isPhase6, sourceLink: !isPhase6, srcNameDim: null, srcLinkDim: null, assumed: true };
 }
 function contextIdentityRank(r) {
   if (!r.active_extractors.includes('context')) return -2;   // context not used
   const s = contextIdentityBools(r);
-  return (s.source ? 2 : 0) + (s.domain ? 1 : 0);
+  return (s.sourceName ? 2 : 0) + (s.sourceLink ? 1 : 0);
 }
 function fmtContextIdentity(r) {
   if (!r.active_extractors.includes('context')) {
@@ -916,7 +1007,7 @@ function fmtContextIdentity(r) {
   const star = s.assumed
     ? ' <span style="color:var(--text-dim)" title="not recorded in this run — inferred from the run path (Phase 6 → off) or the 32/32 CLI default (→ on)">*</span>'
     : '';
-  return chip('Source', s.source, s.srcDim) + ' ' + chip('Domain', s.domain, s.domDim) + star;
+  return chip('Source Name', s.sourceName, s.srcNameDim) + ' ' + chip('Source Link', s.sourceLink, s.srcLinkDim) + star;
 }
 
 function degenerateTagHtml(r) {
@@ -936,8 +1027,8 @@ const PARAM_COLUMNS = [
   { key: 'combo', label: 'Active extractors', sort: (r) => r.combo,
     tip: 'Which feature branches (semantic / emotion / style / context) fed the KAN in this run.',
     render: (r) => extractorBadges(r.active_extractors) },
-  { key: 'context_identity', label: 'Context Source/Domain', sort: contextIdentityRank,
-    tip: 'Whether the context branch kept its Source and Domain hash-embedding fields on (--context_source_dim / --context_domain_dim > 0, the 32/32 default) or switched them off (=0), the identity-free control of Phase 6 that isolates outlet leakage. "context off" = the branch was not used at all. A trailing * means the run record predates this field (added 2026-09-10) and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.',
+  { key: 'context_identity', label: 'Context Source Name/Link', sort: contextIdentityRank,
+    tip: 'Whether the context branch kept its Source Name and Source Link hash-embedding fields on (--context_source_name_dim / --context_source_link_dim > 0, the 32/32 default) or switched them off (=0), the identity-free control of Phase 6 that isolates outlet leakage. "context off" = the branch was not used at all. A trailing * means the run record predates this field (added 2026-09-10) and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.',
     render: fmtContextIdentity },
   { key: 'corpus', label: 'Corpus', sort: (r) => r.corpus_fold === null ? -1 : r.corpus_fold,
     tip: 'Corpus this run used: the full original split (fixed train/development/test), a "normal" fold of --corpus_mode kfold (stratified by label, not by outlet), or a "disjoint" fold of --corpus_mode source_disjoint (no Source appears in more than one split of the fold -- the outlet-leakage test). N/Total are the fold index (--kfold_index/--source_split_index) and how many folds were generated (--kfold_n/--source_split_n). Inferred from the run\'s kan_output_dir / vae_model_dirs paths.',
@@ -950,7 +1041,7 @@ const PARAM_COLUMNS = [
     tip: 'Accuracy on the test split (data never seen during training).',
     render: (r) => fmtNum(r.test_accuracy) },
   { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
-    tip: 'F1-score of the Fake class on test (harmonic mean of precision and recall).',
+    tip: 'Macro-F1 on test: mean of the Fake-class and Real-class F1 (each the harmonic mean of that class’s precision and recall).',
     render: (r) => fmtNum(r.test_f1) },
   { key: 'latent_dims', label: 'Latent dims (VAE)', sort: (r) => JSON.stringify(r.latent_dims || {}),
     tip: 'Latent space dimension configured for the VAE of each active branch.',
@@ -993,7 +1084,7 @@ const METRIC_COLUMNS = [
       return gap === null ? '—' : `<span class="${Math.abs(gap) >= gapThreshold ? 'gap-warn' : ''}">${gap.toFixed(4)}</span>`;
     } },
   { key: 'test_f1', label: 'Test F1', sort: (r) => r.test_f1,
-    tip: 'F1-score of the Fake class on test (harmonic mean of precision and recall).',
+    tip: 'Macro-F1 on test: mean of the Fake-class and Real-class F1 (each the harmonic mean of that class’s precision and recall).',
     render: (r) => fmtNum(r.test_f1) },
   { key: 'test_roc_auc', label: 'Test ROC-AUC', sort: (r) => r.test_roc_auc,
     tip: 'Area under the ROC curve on test: how well the model separates Fake from True, across any threshold.',
@@ -1117,6 +1208,15 @@ document.querySelectorAll('.ctx-id-chk').forEach(chk => {
   });
 });
 
+document.querySelectorAll('.phase-chk').forEach(chk => {
+  chk.addEventListener('change', () => {
+    phaseShow[chk.value] = chk.checked;
+    recomputeShownRuns();
+    updateHeaderMeta();
+    if (allRuns.length) renderAll();
+  });
+});
+
 document.getElementById('f1-floor-chk').addEventListener('change', (e) => {
   f1FloorOn = e.target.checked;
   recomputeShownRuns();
@@ -1143,18 +1243,42 @@ function renderBarChart() {
   }, { responsive: true, displaylogo: false });
 }
 
-// `agg` is 'mean' or 'max'; both charts share layout, differ only in how a
-// combination's runs are aggregated. Cell hover always shows the run count.
+// Row key for the heatmaps below: combo alone, except when context is part
+// of the combo, where identity on/off must never be averaged together (a
+// combo's identity-on and identity-off runs measure different things, see
+// Section 5.4 of the paper). Reuses contextIdentityBools(), already used to
+// render the "Context Source Name/Link" table column.
+function comboIdentityKey(r) {
+  if (!r.active_extractors.includes('context')) return r.combo;
+  return r.combo + (contextIdentityBools(r).sourceName ? ' (identity on)' : ' (identity off)');
+}
+
+// `agg` is 'mean' or 'max'; both charts share layout and row grouping
+// (always split by identity on/off), and differ in two ways:
+//   - how a combination's runs are aggregated into one cell;
+//   - which metric ranks the rows and, for 'mean', is used to rank at all.
+// 'max' keeps its original behaviour (rank and colour by test F1) as a raw
+// exploration view across every loaded run, seeds and hyperparameters
+// included, useful for eyeballing the single best run ever recorded for a
+// combination. 'mean' is the view used for the paper figure: mean (±sd)
+// over the row's runs, rows ranked by mean test F1 (the paper reports test
+// metrics only; validation F1 is used solely for model selection).
+// Cell hover always shows the run count.
 function renderComboHeatmap(divId, agg) {
+  const isMax = agg === 'max';
   const metrics = ['test_accuracy', 'test_f1', 'test_roc_auc', 'test_log_loss'];
   const metricLabels = ['accuracy', 'f1', 'roc_auc', 'log_loss'];
-  const isMax = agg === 'max';
+  const rankMetric = 'test_f1';
+
   const byCombo = {};
-  shownRuns.forEach(r => { (byCombo[r.combo] = byCombo[r.combo] || []).push(r); });
+  shownRuns.forEach(r => {
+    const k = comboIdentityKey(r);
+    (byCombo[k] = byCombo[k] || []).push(r);
+  });
   const valsFor = (combo, m) => byCombo[combo].map(r => r[m]).filter(v => v !== null && v !== undefined);
   const aggregate = (vals) => isMax ? Math.max(...vals) : mean(vals);
   const combos = Object.keys(byCombo).sort((a, b) => {
-    const va = valsFor(a, 'test_f1'), vb = valsFor(b, 'test_f1');
+    const va = valsFor(a, rankMetric), vb = valsFor(b, rankMetric);
     return (va.length ? aggregate(va) : 0) - (vb.length ? aggregate(vb) : 0);
   });
   const z = combos.map(combo => metrics.map(m => {
@@ -1179,10 +1303,10 @@ function renderComboHeatmap(divId, agg) {
   }], {
     title: isMax
       ? 'Extractor combinations vs. test metrics (max across runs)'
-      : 'Extractor combinations vs. test metrics (mean; mean±std if there are multiple runs)',
+      : 'Extractor combinations vs. test metrics (mean over runs, ranked by test F1)',
     paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
     font: { color: '#1a1f2b' },
-    margin: { t: 40, l: 220 },
+    margin: { t: 40, l: 280 },
   }, { responsive: true, displaylogo: false });
 }
 
@@ -1770,37 +1894,37 @@ function renderConfusionMatrix() {
   }), CHART_CFG);
 }
 
-// (m) Per-topic test F1, grouped bars by extractor combination.
-function renderTopicBreakdown() {
-  const runs = shownRuns.filter(r => r.topic_breakdown && typeof r.topic_breakdown === 'object');
-  if (!runs.length) { chartEmpty('topic-breakdown-chart', 'No runs carry a topic_breakdown block.'); return; }
+// (m) Per-domain test F1, grouped bars by extractor combination.
+function renderDomainBreakdown() {
+  const runs = shownRuns.filter(r => r.domain_breakdown && typeof r.domain_breakdown === 'object');
+  if (!runs.length) { chartEmpty('domain-breakdown-chart', 'No runs carry a domain_breakdown block.'); return; }
   const combos = chartComboOrder(runs);
   const colorFor = chartComboColors(combos);
-  const topics = [...new Set(runs.flatMap(r => Object.keys(r.topic_breakdown)))];
-  const topicN = {};
-  topics.forEach(tp => {
-    const ns = runs.map(r => r.topic_breakdown[tp]).filter(Boolean).map(o => o.n || 0);
-    topicN[tp] = ns.length ? mean(ns) : 0;
+  const domains = [...new Set(runs.flatMap(r => Object.keys(r.domain_breakdown)))];
+  const domainN = {};
+  domains.forEach(dm => {
+    const ns = runs.map(r => r.domain_breakdown[dm]).filter(Boolean).map(o => o.n || 0);
+    domainN[dm] = ns.length ? mean(ns) : 0;
   });
-  topics.sort((a, b) => topicN[b] - topicN[a]);
+  domains.sort((a, b) => domainN[b] - domainN[a]);
   const traces = combos.map(combo => {
     const rs = runs.filter(r => r.combo === combo);
     return {
       type: 'bar', name: combo, marker: { color: colorFor[combo] },
-      x: topics,
-      y: topics.map(tp => {
-        const vals = rs.map(r => r.topic_breakdown[tp]).filter(Boolean)
+      x: domains,
+      y: domains.map(dm => {
+        const vals = rs.map(r => r.domain_breakdown[dm]).filter(Boolean)
           .map(o => o.f1).filter(v => typeof v === 'number');
         return vals.length ? mean(vals) : null;
       }),
-      customdata: topics.map(tp => Math.round(topicN[tp])),
-      hovertemplate: `${combo}<br>%{x}<br>mean topic F1 = %{y:.3f}<br>~%{customdata} articles<extra></extra>`,
+      customdata: domains.map(dm => Math.round(domainN[dm])),
+      hovertemplate: `${combo}<br>%{x}<br>mean domain F1 = %{y:.3f}<br>~%{customdata} articles<extra></extra>`,
     };
   });
-  Plotly.newPlot('topic-breakdown-chart', traces, baseLayout({
-    title: 'Per-topic test F1 (mean across runs), grouped by extractor combination',
+  Plotly.newPlot('domain-breakdown-chart', traces, baseLayout({
+    title: 'Per-domain test F1 (mean across runs), grouped by extractor combination',
     barmode: 'group', xaxis: { tickangle: -35 },
-    yaxis: { title: 'mean topic F1', rangemode: 'tozero' },
+    yaxis: { title: 'mean domain F1', rangemode: 'tozero' },
     legend: { orientation: 'h', y: -0.35 }, margin: { t: 40, b: 130 },
   }), CHART_CFG);
 }
@@ -1829,13 +1953,13 @@ function renderPrecisionRecall() {
       type: 'scatter', mode: 'markers', name: combo,
       x: rs.map(r => chartTestMetric(r, 'recall')),
       y: rs.map(r => chartTestMetric(r, 'precision')),
-      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(combo)}<br>F1 = ${fmtNum(r.test_f1)}`),
+      text: rs.map(r => `${escapeHtml(r.run_id)}<br>${escapeHtml(combo)}<br>F1 (Fake) = ${fmtNum(chartTestMetric(r, 'f1_fake'))}<br>macro-F1 = ${fmtNum(r.test_f1)}`),
       hovertemplate: '%{text}<br>recall = %{x:.3f}<br>precision = %{y:.3f}<extra></extra>',
       marker: { size: 8, color: colorFor[combo], opacity: 0.8, line: { width: 0.5, color: 'rgba(0,0,0,0.3)' } },
     };
   });
   Plotly.newPlot('precision-recall-chart', [...iso, ...pts], baseLayout({
-    title: 'Precision vs. recall on test (dotted = iso-F1 lines)',
+    title: 'Precision vs. recall of the Fake class on test (dotted = iso Fake-class F1 lines)',
     xaxis: { title: 'recall (Fake)', range: [0, 1] },
     yaxis: { title: 'precision (Fake)', range: [0, 1] },
     legend: { orientation: 'h', y: -0.2 }, margin: { t: 40, b: 80 },
@@ -2559,7 +2683,7 @@ function renderAll() {
   renderLatentVsVolumeScatter();
   renderLatentSweep();
   renderConfusionMatrix();
-  renderTopicBreakdown();
+  renderDomainBreakdown();
   renderPrecisionRecall();
   renderParetoEfficiency();
   renderParallelCoords();

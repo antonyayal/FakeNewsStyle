@@ -141,7 +141,7 @@ def run_main_command(cmd: List[str], require_results_json: bool = True) -> Dict[
     dataset_source_label_leakage / experiment_phases_status memory for why
     that was wrong: with ~860 KAN runs comparing configs, selecting by test
     F1 directly overfits every "winner" to the test set via search, on top
-    of and independent from the Source/Domain leakage issue.)"""
+    of and independent from the Source Name/Source Link leakage issue.)"""
 
     start = time.time()
     try:

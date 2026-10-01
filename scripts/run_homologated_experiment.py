@@ -45,10 +45,13 @@ from src.features.context_extractor import ContextExtractor, ContextExtractorCon
 from src.models.train_vae_from_pkl import train_vae_from_paths
 from src.models.kan import train_kan_from_pkls
 from src.experiments.run_logger import log_experiment_result, hash_files, MODALITY_ORDER
-from src.evaluation.metrics import evaluate_binary_classifier, save_metrics, compute_topic_breakdown
+from src.evaluation.metrics import evaluate_binary_classifier, save_metrics, compute_domain_breakdown
 
 RAW_DIR = BASE_DIR / "data" / "raw"
-SCRATCH_DIR = Path("/tmp/claude-1001/-home-antonio-Projects-FakeNewsStyle/fbd1d9ea-f7ac-4ea0-bcda-f29bdae1f4ee/scratchpad/homologated_raw_pkl")
+# Intermediate xlsx -> pkl copies (mirrors data/01_corpus_pkl for the default
+# pipeline). Previously pointed at a temporary session scratchpad under /tmp,
+# which doesn't survive reboots.
+RAW_PKL_DIR = BASE_DIR / "data" / "01_corpus_pkl_homologated"
 
 CLEAN_DIR = BASE_DIR / "data" / "02_corpus_clean_homologated"
 RAW_FEATURES_DIR = BASE_DIR / "data" / "03_features_raw_homologated"
@@ -58,6 +61,18 @@ MERGED_DIR = BASE_DIR / "data" / "06_vae_latents_merged_homologated"
 
 LATENT_DIMS = {"semantic": 128, "emotion": 16, "style": 16, "context": 64}
 HIDDEN_DIMS = {"semantic": [512, 256], "emotion": [128, 64], "style": [128, 64], "context": [256, 128]}
+
+# Long-text handling, kept in sync with main.py's defaults (2026-09-29):
+# XLM-R sees up to 512 tokens (was 256); pysentimiento (128-token window) runs
+# on sentence-aligned chunks aggregated per article instead of truncating.
+SEMANTIC_MAX_LEN = 512
+EMOTION_CHUNKING = "sentences"   # "sentences" | "none" (old truncated behavior)
+EMOTION_AGGREGATION = "mean"     # "mean" (23-dim) | "mean_max" (33-dim)
+EMOTION_FEATURE_COLS = (
+    ["emo_probs", "sent_probs", "emo_probs_max", "sent_probs_max", "signals"]
+    if EMOTION_AGGREGATION == "mean_max"
+    else ["emo_probs", "sent_probs", "signals"]
+)
 
 XLSX_FILES = {
     "train": "train_homologated.xlsx",
@@ -90,14 +105,14 @@ def _extract_labels_from_obj(obj, label_col: str = "label"):
 def build_corpus_clean() -> None:
     print("=" * 80)
     print("Step A: building homologated corpus_clean (label homologation applied)")
-    SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_PKL_DIR.mkdir(parents=True, exist_ok=True)
     CLEAN_DIR.mkdir(parents=True, exist_ok=True)
     log_dir = BASE_DIR / "logs" / "preprocess_homologated"
 
     for split, fname in XLSX_FILES.items():
         xlsx_path = RAW_DIR / fname
         df = pd.read_excel(xlsx_path, engine="openpyxl")
-        tmp_pkl = SCRATCH_DIR / f"{split}_raw.pkl"
+        tmp_pkl = RAW_PKL_DIR / f"{split}_raw.pkl"
         df.to_pickle(tmp_pkl)
 
         out_path = CLEAN_DIR / f"{split}.pkl"
@@ -122,7 +137,7 @@ def extract_features() -> None:
         pooling="mean",
         device="cpu",
         batch_size=8,
-        max_len=256,
+        max_len=SEMANTIC_MAX_LEN,
     )
     print("  semantic done")
 
@@ -136,6 +151,9 @@ def extract_features() -> None:
         use_preprocess_tweet=False,
         normalize_signals_by="chars",
         extra_signals=True,
+        chunking=EMOTION_CHUNKING,
+        chunk_max_tokens=128,
+        aggregation=EMOTION_AGGREGATION,
     )
     print("  emotion done")
 
@@ -146,7 +164,9 @@ def extract_features() -> None:
         in_path = CLEAN_DIR / f"{split_name}.pkl"
         obj = _load_pkl_any(in_path)
 
-        texts, ids = _extract_texts_and_ids_from_obj(obj, "Text", "Id")
+        # Same text as main.py's default (--style_text_column text_xlmr):
+        # headline + body, minimally cleaned. Was "Text" (body only).
+        texts, ids = _extract_texts_and_ids_from_obj(obj, "text_xlmr", "Id")
         labels = _extract_labels_from_obj(obj)
         style_extractor.save_features_pkl(
             texts=texts, ids=ids, labels=labels,
@@ -179,7 +199,7 @@ def train_vaes() -> None:
     print("Step C: training per-branch VAEs on homologated data")
 
     for branch, latent_dim in LATENT_DIMS.items():
-        feature_cols = ["emo_probs", "sent_probs", "signals"] if branch == "emotion" else None
+        feature_cols = EMOTION_FEATURE_COLS if branch == "emotion" else None
         train_pkl = RAW_FEATURES_DIR / branch / f"train_{branch}.pkl"
         val_pkl = RAW_FEATURES_DIR / branch / f"val_{branch}.pkl"
         test_pkl = RAW_FEATURES_DIR / branch / f"test_{branch}.pkl"
@@ -257,10 +277,10 @@ def run_kan(label: str, active_extractors: list[str], kan_kwargs: dict) -> None:
     # Positional join against the homologated test corpus (same assumption as
     # main.py's Step 10: row order is preserved end-to-end, never reshuffled).
     test_corpus_df = pd.read_pickle(CLEAN_DIR / "test.pkl")
-    topic_breakdown = compute_topic_breakdown(
+    domain_breakdown = compute_domain_breakdown(
         y_true=kan_result["predictions"]["test"]["y_true"],
         y_prob=kan_result["predictions"]["test"]["y_prob"],
-        topics=test_corpus_df["Topic"].tolist(),
+        domains=test_corpus_df["Topic"].tolist(),
     ) if "Topic" in test_corpus_df.columns else None
 
     record_path = log_experiment_result(
@@ -284,7 +304,7 @@ def run_kan(label: str, active_extractors: list[str], kan_kwargs: dict) -> None:
         training_time_seconds=kan_result.get("training_time_seconds"),
         num_parameters=kan_result.get("num_parameters"),
         dataset_hash=dataset_hash,
-        topic_breakdown=topic_breakdown,
+        domain_breakdown=domain_breakdown,
     )
 
     print(f"  test accuracy={metrics['test']['accuracy']:.4f} f1={metrics['test']['f1']:.4f} "

@@ -19,6 +19,20 @@ Flow:
 Usage:
     python style_feature_importance.py --pkl path/to/style_features.pkl --out ./results
 
+Standard-split mode (the protocol used in the thesis/article): fit on the
+train split, measure permutation importance on the test split with macro-F1
+(the primary metric) and ROC-AUC, averaged over several RandomForest seeds,
+both per feature and per feature group (groups A-G of the style vector,
+permuted jointly so correlated features don't split their importance):
+    python scripts/style_feature_importance.py \
+        --train-pkl data/03_features_raw/style/train_style.pkl \
+        --eval-pkl data/03_features_raw/style/test_style.pkl \
+        --train-xlsx data/raw/train.xlsx --eval-xlsx data/raw/test.xlsx \
+        --out style_importance_results/standard_split
+The optional --train-xlsx/--eval-xlsx add a length control: lexical-diversity
+indices depend on text length, so it reports how much of their contribution a
+plain log word-count feature recovers.
+
 Requirements:
     pip install scikit-learn pandas numpy matplotlib seaborn shap
     (shap is optional; if not installed, the script still works
@@ -36,7 +50,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.inspection import permutation_importance
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, f1_score, roc_auc_score
 
 try:
     import shap  # type: ignore
@@ -140,6 +154,169 @@ def compute_shap_importance(clf, X_test, feature_names, sample_size=200):
     return df
 
 
+# Groups A-G of the style vector (thesis, Section "Vector de estilo").
+FEATURE_GROUPS = {
+    "A_readability": ["ifsz"],
+    "B_formality": ["formality_f"],
+    "C_syntax": ["len_sent", "sconj_per_sent", "avg_dep_depth", "verbs_per_sent"],
+    "D_lexical_diversity": ["ttr", "redundancy", "herdans_c", "root_ttr"],
+    "E_pos_distribution": ["pos_noun_ratio", "pos_verb_ratio", "pos_adj_ratio", "pos_adv_ratio",
+                           "pos_pron_ratio", "pos_det_ratio", "pos_adp_ratio"],
+    "F_spelling": ["error_rate"],
+    "G_surface_signals": None,  # every remaining sig_* feature
+}
+
+
+def resolve_groups(feature_names):
+    names = list(feature_names)
+    groups = {}
+    for g, members in FEATURE_GROUPS.items():
+        if members is None:
+            members = [n for n in names if n.startswith("sig_")]
+        groups[g] = [names.index(m) for m in members if m in names]
+    covered = sorted(i for idx in groups.values() for i in idx)
+    if covered != list(range(len(names))):
+        missing = [names[i] for i in range(len(names)) if i not in covered]
+        raise ValueError(f"Features not assigned to any group: {missing}")
+    return groups
+
+
+def scores_for(clf, X, y, pos_label):
+    pred = clf.predict(X)
+    proba = clf.predict_proba(X)[:, list(clf.classes_).index(pos_label)]
+    return f1_score(y, pred, average="macro"), roc_auc_score(y == pos_label, proba)
+
+
+def grouped_permutation_importance(clf, X, y, groups, pos_label, n_repeats, seed):
+    """Drop in test macro-F1 / ROC-AUC when all columns of a group are
+    permuted together (same row permutation for every column in the group)."""
+    rng = np.random.RandomState(seed)
+    base_f1, base_auc = scores_for(clf, X, y, pos_label)
+    out = {}
+    for g, idx in groups.items():
+        drops_f1, drops_auc = [], []
+        for _ in range(n_repeats):
+            Xp = X.copy()
+            Xp[:, idx] = X[rng.permutation(len(X))][:, idx]
+            f1, auc = scores_for(clf, Xp, y, pos_label)
+            drops_f1.append(base_f1 - f1)
+            drops_auc.append(base_auc - auc)
+        out[g] = (np.mean(drops_f1), np.mean(drops_auc))
+    return out
+
+
+def log_word_count(xlsx_path, ids):
+    """log(1 + words in headline + body), aligned to the PKL's row order."""
+    raw = pd.read_excel(xlsx_path)
+    if [str(i) for i in raw["Id"]] != [str(i) for i in ids]:
+        raise ValueError(f"{xlsx_path} rows are not aligned with the PKL ids.")
+    text = raw["Headline"].fillna("").astype(str) + " " + raw["Text"].fillna("").astype(str)
+    return np.log1p(text.str.split().str.len().to_numpy(dtype=float))
+
+
+def length_control(args, X_tr, y_tr, X_te, y_te, names, groups, seeds, out_dir):
+    """Lexical-diversity indices depend on text length, so check how much of
+    group D's contribution a plain length feature recovers."""
+    with open(args.train_pkl, "rb") as f:
+        len_tr = log_word_count(args.train_xlsx, pickle.load(f)["ids"])
+    with open(args.eval_pkl, "rb") as f:
+        len_te = log_word_count(args.eval_xlsx, pickle.load(f)["ids"])
+    fake_tr, fake_te = y_tr == args.pos_label, y_te == args.pos_label
+    print(f"Median words (eval): Fake={np.median(np.expm1(len_te[fake_te])):.0f}, "
+          f"True={np.median(np.expm1(len_te[~fake_te])):.0f}; "
+          f"ROC-AUC of length alone (shorter = Fake)={roc_auc_score(fake_te, -len_te):.3f}")
+
+    no_d = [i for i in range(len(names)) if i not in groups["D_lexical_diversity"]]
+    variants = {
+        "all_style": (X_tr, X_te),
+        "style_without_D": (X_tr[:, no_d], X_te[:, no_d]),
+        "style_without_D_plus_length": (np.column_stack([X_tr[:, no_d], len_tr]),
+                                        np.column_stack([X_te[:, no_d], len_te])),
+        "length_only": (len_tr[:, None], len_te[:, None]),
+    }
+    rows = []
+    for name, (A, B) in variants.items():
+        f1s = [f1_score(y_te, RandomForestClassifier(
+                   n_estimators=300, min_samples_leaf=2, class_weight="balanced",
+                   n_jobs=-1, random_state=seed).fit(A, y_tr).predict(B), average="macro")
+               for seed in seeds]
+        rows.append({"variant": name, "macro_f1_mean": np.mean(f1s), "macro_f1_sd": np.std(f1s)})
+    df = pd.DataFrame(rows)
+    df.to_csv(out_dir / "length_control.csv", index=False)
+    print(df.to_string(index=False))
+
+
+def run_standard_split(args, out_dir):
+    """Fit on the train split, evaluate on the held-out test split, averaging
+    over several RandomForest seeds."""
+    X_tr, names, y_tr = load_pkl(args.train_pkl)
+    X_te, names_te, y_te = load_pkl(args.eval_pkl)
+    if list(names) != list(names_te):
+        raise ValueError("Train and eval PKLs have different feature_names.")
+    pos_label = args.pos_label
+    groups = resolve_groups(names)
+    seeds = list(range(args.n_seeds))
+    print(f"Train {X_tr.shape}, eval {X_te.shape}, seeds={seeds}, positive class={pos_label!r}")
+
+    base, feat_f1, feat_auc, grp = [], [], [], []
+    for seed in seeds:
+        clf = RandomForestClassifier(
+            n_estimators=300, min_samples_leaf=2, class_weight="balanced",
+            n_jobs=-1, random_state=seed,
+        ).fit(X_tr, y_tr)
+        base.append(scores_for(clf, X_te, y_te, pos_label))
+        for scoring, store in (("f1_macro", feat_f1), ("roc_auc", feat_auc)):
+            r = permutation_importance(clf, X_te, y_te, n_repeats=args.n_repeats,
+                                       random_state=seed, scoring=scoring, n_jobs=-1)
+            store.append(r.importances_mean)
+        grp.append(grouped_permutation_importance(clf, X_te, y_te, groups, pos_label,
+                                                  args.n_repeats, seed))
+        print(f"  seed {seed}: test macro-F1={base[-1][0]:.3f}, ROC-AUC={base[-1][1]:.3f}")
+
+    base = np.array(base)
+    pd.DataFrame(base, columns=["macro_f1", "roc_auc"]).assign(seed=seeds).to_csv(
+        out_dir / "baseline_scores.csv", index=False)
+    print(f"Mean test macro-F1={base[:, 0].mean():.3f} (sd {base[:, 0].std():.3f}), "
+          f"ROC-AUC={base[:, 1].mean():.3f} (sd {base[:, 1].std():.3f})")
+
+    group_of = {names[i]: g for g, idx in groups.items() for i in idx}
+    feat_f1, feat_auc = np.array(feat_f1), np.array(feat_auc)
+    feat_df = pd.DataFrame({
+        "feature": names,
+        "group": [group_of[n] for n in names],
+        "f1_drop_mean": feat_f1.mean(axis=0),
+        "f1_drop_sd_seeds": feat_f1.std(axis=0),
+        "auc_drop_mean": feat_auc.mean(axis=0),
+        "auc_drop_sd_seeds": feat_auc.std(axis=0),
+    }).sort_values("f1_drop_mean", ascending=False)
+    feat_df.to_csv(out_dir / "permutation_importance.csv", index=False)
+    print(feat_df.head(15).to_string(index=False))
+
+    grp_df = pd.DataFrame([
+        {"group": g, "n_features": len(groups[g]),
+         "f1_drop_mean": np.mean([r[g][0] for r in grp]),
+         "f1_drop_sd_seeds": np.std([r[g][0] for r in grp]),
+         "auc_drop_mean": np.mean([r[g][1] for r in grp]),
+         "auc_drop_sd_seeds": np.std([r[g][1] for r in grp])}
+        for g in groups
+    ]).sort_values("f1_drop_mean", ascending=False)
+    grp_df.to_csv(out_dir / "group_permutation_importance.csv", index=False)
+    print(grp_df.to_string(index=False))
+
+    if args.train_xlsx and args.eval_xlsx:
+        length_control(args, X_tr, y_tr, X_te, y_te, names, groups, seeds, out_dir)
+
+    corr = compute_correlation_matrix(X_tr, names)
+    corr.to_csv(out_dir / "correlation_matrix.csv")
+    redundant = find_redundant_pairs(corr, threshold=args.corr_threshold)
+    pd.DataFrame(redundant, columns=["feature_a", "feature_b", "spearman_corr"]).to_csv(
+        out_dir / "redundant_pairs.csv", index=False)
+    print(f"{len(redundant)} pairs with |corr| >= {args.corr_threshold} (train split):")
+    for a, b, v in redundant:
+        print(f"  {a} <-> {b}  corr={v}")
+    print("\nDone. Check the folder:", out_dir.resolve())
+
+
 def compute_correlation_matrix(X, feature_names):
     df = pd.DataFrame(X, columns=feature_names)
     corr = df.corr(method="spearman")
@@ -162,14 +339,29 @@ def find_redundant_pairs(corr: pd.DataFrame, threshold: float = 0.85):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pkl", required=True, help="Path to the StyleExtractor .pkl")
+    parser.add_argument("--pkl", help="Path to the StyleExtractor .pkl (random holdout mode)")
+    parser.add_argument("--train-pkl", help="Train-split .pkl (standard-split mode)")
+    parser.add_argument("--eval-pkl", help="Eval-split .pkl, e.g. test (standard-split mode)")
     parser.add_argument("--out", default="./style_importance_results", help="Output folder")
     parser.add_argument("--test-size", type=float, default=0.25)
     parser.add_argument("--corr-threshold", type=float, default=0.85)
+    parser.add_argument("--n-seeds", type=int, default=5)
+    parser.add_argument("--n-repeats", type=int, default=30)
+    parser.add_argument("--pos-label", default="Fake")
+    parser.add_argument("--train-xlsx", help="Raw train .xlsx, enables the length control")
+    parser.add_argument("--eval-xlsx", help="Raw eval .xlsx, enables the length control")
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.train_pkl or args.eval_pkl:
+        if not (args.train_pkl and args.eval_pkl):
+            parser.error("--train-pkl and --eval-pkl must be given together")
+        run_standard_split(args, out_dir)
+        return
+    if not args.pkl:
+        parser.error("give --pkl, or --train-pkl and --eval-pkl")
 
     print(f"[1/6] Loading {args.pkl} ...")
     X, feature_names, y = load_pkl(args.pkl)

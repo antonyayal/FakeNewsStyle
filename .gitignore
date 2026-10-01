@@ -14,6 +14,7 @@ results/
 results_old/
 results_old_2/
 results_old_3/
+results_old_4/
 logs/
 
 # graphify knowledge graph (regenerable via `graphify extract .` / `graphify update .`)
@@ -34,3 +35,4 @@ data/05_vae_latents*/
 data/06_vae_latents_merged*/
 data/07_kan_runs*/
 models/vae*/
+paper/

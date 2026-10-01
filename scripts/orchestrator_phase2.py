@@ -5,8 +5,8 @@ Phase 2 (Option A): standard-split evaluation -- the in-distribution result.
 
 Runs every extractor combination, unfiltered:
   - the 15 non-empty subsets of {semantic, emotion, style, context};
-  - each combo that includes `context` is run twice, with the Source/Domain
-    hash embeddings ON and OFF (identity-free);
+  - each combo that includes `context` is run twice, with the Source Name/
+    Source Link hash embeddings ON and OFF (identity-free);
   - each of those 23 combo-variants at both kan_hidden_dim values;
   - x SEEDS.
 = 23 x 2 x 3 = 138 KAN runs on the fixed train/val/test split.

@@ -108,7 +108,7 @@ from src.features.merge_raw_features_for_kan import merge_all_splits
 from src.models.train_vae_from_pkl import train_vae_from_paths
 from src.models.kan import train_kan_from_pkls
 from src.experiments.run_logger import log_experiment_result, hash_files, MODALITY_ORDER
-from src.evaluation.metrics import evaluate_binary_classifier, save_metrics, compute_topic_breakdown
+from src.evaluation.metrics import evaluate_binary_classifier, save_metrics, compute_domain_breakdown
 
 try:
     import torch  # type: ignore
@@ -250,6 +250,10 @@ parser.add_argument("--log_dir", type=str, default="logs/preprocess")
 parser.add_argument("--extract_semantic", action="store_true")
 parser.add_argument("--semantic_pooling", type=str, default="mean", choices=["mean", "cls", "attention"])
 parser.add_argument("--semantic_device", type=str, default="cpu")
+parser.add_argument("--semantic_max_len", type=int, default=512,
+                    help="Tokenizer max length for XLM-R (model limit is 512). "
+                         "Was 256 before 2026-09-29; existing semantic PKLs/VAEs were built with 256.")
+parser.add_argument("--semantic_batch_size", type=int, default=8)
 
 # ---- emotion
 parser.add_argument("--extract_emotion", action="store_true")
@@ -259,6 +263,20 @@ parser.add_argument("--emotion_use_preprocess_tweet", action="store_true")
 parser.add_argument("--emotion_input_dir", type=str, default=None)
 parser.add_argument("--emotion_text_column", type=str, default="text_xlmr")
 parser.add_argument("--emotion_id_column", type=str, default="Id")
+parser.add_argument("--emotion_chunking", type=str, default="sentences", choices=["sentences", "none"],
+                    help="'sentences' splits each article into sentence-aligned chunks of at most "
+                         "--emotion_chunk_max_tokens RoBERTuito tokens so the whole text is seen; "
+                         "'none' = original behavior (pysentimiento truncates to 128 tokens).")
+parser.add_argument("--emotion_chunk_max_tokens", type=int, default=128)
+parser.add_argument("--emotion_aggregation", type=str, default="mean", choices=["mean", "mean_max"],
+                    help="'mean' = token-weighted mean over chunks (23-dim vector); "
+                         "'mean_max' = mean + per-class max over chunks (33-dim vector).")
+parser.add_argument("--emotion_output_dir", type=str, default=None,
+                    help="Override for where raw emotion features are written (default: "
+                         "FEATURES_RAW_DIR/emotion). Lets variants (e.g. mean_max) coexist.")
+parser.add_argument("--emotion_vae_input_dir", type=str, default=None,
+                    help="Override for where --run_vaes reads emotion's raw {split}_emotion.pkl "
+                         "from (default: FEATURES_RAW_DIR/emotion). Pair with --emotion_output_dir.")
 
 # ---- style
 parser.add_argument("--extract_style", action="store_true")
@@ -318,9 +336,9 @@ parser.add_argument("--context_link_column", type=str, default="Link")
 parser.add_argument("--context_id_column", type=str, default="Id")
 parser.add_argument("--context_author_column", type=str, default=None)
 parser.add_argument("--context_date_column", type=str, default=None)
-parser.add_argument("--context_source_dim", type=int, default=32)
-parser.add_argument("--context_domain_dim", type=int, default=32)
-parser.add_argument("--context_topic_dim", type=int, default=16)
+parser.add_argument("--context_source_name_dim", type=int, default=32)
+parser.add_argument("--context_source_link_dim", type=int, default=32)
+parser.add_argument("--context_domain_dim", type=int, default=16)
 parser.add_argument("--context_author_dim", type=int, default=0)
 parser.add_argument("--context_n_hashes", type=int, default=2)
 parser.add_argument("--context_unsigned", action="store_true")
@@ -408,7 +426,7 @@ parser.add_argument(
     type=str,
     default=None,
     help="Corpus PKL (with a Topic column) positionally aligned with the KAN test split, "
-    "used to compute a per-Topic accuracy/F1 breakdown. Defaults to preprocess_output_dir/test.pkl.",
+    "used to compute a per-Domain accuracy/F1 breakdown. Defaults to preprocess_output_dir/test.pkl.",
 )
 
 args = parser.parse_args()
@@ -597,8 +615,8 @@ if args.extract_semantic:
         log_dir=LOGS_SEMANTIC_DIR,
         pooling=args.semantic_pooling,
         device=args.semantic_device,
-        batch_size=8,
-        max_len=256,
+        batch_size=int(args.semantic_batch_size),
+        max_len=int(args.semantic_max_len),
     )
 
     print("Semantic feature extraction completed")
@@ -613,7 +631,7 @@ if args.extract_emotion:
     print("Extracting emotion features (pysentimiento)")
 
     emotion_input_dir = _default_input_dir(args.emotion_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
-    emotion_output_dir = FEATURES_RAW_DIR / "emotion"
+    emotion_output_dir = Path(args.emotion_output_dir) if args.emotion_output_dir else FEATURES_RAW_DIR / "emotion"
     emotion_output_dir.mkdir(parents=True, exist_ok=True)
 
     emotion_device = _resolve_emotion_device(args.emotion_device)
@@ -628,6 +646,9 @@ if args.extract_emotion:
         use_preprocess_tweet=args.emotion_use_preprocess_tweet,
         normalize_signals_by="chars",
         extra_signals=True,
+        chunking=args.emotion_chunking,
+        chunk_max_tokens=int(args.emotion_chunk_max_tokens),
+        aggregation=args.emotion_aggregation,
     )
 
     print("Emotion feature extraction completed")
@@ -706,7 +727,7 @@ else:
 # Step 6: Context features
 # =====================================================
 if args.extract_context:
-    print("Extracting context features (Source/Domain/Topic/Age)")
+    print("Extracting context features (Source Name/Source Link/Domain/Age)")
 
     context_input_dir = _default_input_dir(args.context_input_dir, PROCESSED_BY_MODEL_DIR, PROCESSED_DIR)
     context_output_dir = Path(args.context_output_dir) if args.context_output_dir else FEATURES_RAW_DIR / "context"
@@ -720,9 +741,9 @@ if args.extract_context:
             id_column=args.context_id_column,
             author_column=args.context_author_column,
             date_column=args.context_date_column,
-            source_dim=int(args.context_source_dim),
+            source_name_dim=int(args.context_source_name_dim),
+            source_link_dim=int(args.context_source_link_dim),
             domain_dim=int(args.context_domain_dim),
-            topic_dim=int(args.context_topic_dim),
             author_dim=int(args.context_author_dim),
             n_hashes=int(args.context_n_hashes),
             signed=not args.context_unsigned,
@@ -820,6 +841,17 @@ else:
 if args.run_vaes:
     print("Training VAEs for latent feature extraction")
 
+    _EMOTION_VAE_DIR = Path(args.emotion_vae_input_dir) if args.emotion_vae_input_dir else FEATURES_RAW_DIR / "emotion"
+
+    def _emotion_feature_columns(train_pkl: Path) -> list:
+        cols = ["emo_probs", "sent_probs", "signals"]
+        try:
+            if {"emo_probs_max", "sent_probs_max"} <= set(pd.read_pickle(train_pkl).columns):
+                cols = ["emo_probs", "sent_probs", "emo_probs_max", "sent_probs_max", "signals"]
+        except Exception:
+            pass
+        return cols
+
     all_vae_configs = {
         "semantic": {
             "enabled": not args.exclude_semantic,
@@ -834,10 +866,12 @@ if args.run_vaes:
             "enabled": not args.exclude_emotion,
             "latent_dim": int(args.emotion_latent_dim),
             "hidden_dims": [128, 64],
-            "feature_columns": ["emo_probs", "sent_probs", "signals"],
-            "train_pkl": FEATURES_RAW_DIR / "emotion" / "train_emotion.pkl",
-            "val_pkl": FEATURES_RAW_DIR / "emotion" / "val_emotion.pkl",
-            "test_pkl": FEATURES_RAW_DIR / "emotion" / "test_emotion.pkl",
+            # emo_probs_max/sent_probs_max are only present in PKLs extracted
+            # with --emotion_aggregation mean_max (33-dim instead of 23-dim).
+            "feature_columns": _emotion_feature_columns(_EMOTION_VAE_DIR / "train_emotion.pkl"),
+            "train_pkl": _EMOTION_VAE_DIR / "train_emotion.pkl",
+            "val_pkl": _EMOTION_VAE_DIR / "val_emotion.pkl",
+            "test_pkl": _EMOTION_VAE_DIR / "test_emotion.pkl",
         },
         "style": {
             "enabled": not args.exclude_style,
@@ -1114,17 +1148,17 @@ if args.train_kan:
         if args.kan_test_corpus_pkl
         else PROCESSED_BY_MODEL_DIR / "test.pkl"
     )
-    topic_breakdown = None
+    domain_breakdown = None
     if test_corpus_pkl.exists():
         test_corpus_df = pd.read_pickle(test_corpus_pkl)
         if "Topic" in test_corpus_df.columns:
-            topic_breakdown = compute_topic_breakdown(
+            domain_breakdown = compute_domain_breakdown(
                 y_true=np.asarray(preds["test"]["y_true"]),
                 y_prob=np.asarray(preds["test"]["y_prob"]),
-                topics=test_corpus_df["Topic"].tolist(),
+                domains=test_corpus_df["Topic"].tolist(),
             )
-    if topic_breakdown is None:
-        print(f"Topic breakdown skipped (no usable Topic column at {test_corpus_pkl})")
+    if domain_breakdown is None:
+        print(f"Domain breakdown skipped (no usable Topic column at {test_corpus_pkl})")
 
     # ---- experiment logging (results/) ----
     use_modality = {
@@ -1178,10 +1212,10 @@ if args.train_kan:
         training_time_seconds=kan_result.get("training_time_seconds"),
         num_parameters=kan_result.get("num_parameters"),
         dataset_hash=dataset_hash,
-        topic_breakdown=topic_breakdown,
+        domain_breakdown=domain_breakdown,
         context_dims={
-            "source": int(args.context_source_dim),
-            "domain": int(args.context_domain_dim),
+            "source_name": int(args.context_source_name_dim),
+            "source_link": int(args.context_source_link_dim),
         },
         results_dir=Path(args.results_dir) if args.results_dir else None,
     )

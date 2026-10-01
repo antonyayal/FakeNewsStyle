@@ -27,8 +27,8 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from experiment_config import (
     ALL_MODALITIES,
     BASE_DIR,
-    CONTEXT_IDFREE_DOMAIN_DIM,
-    CONTEXT_IDFREE_SOURCE_DIM,
+    CONTEXT_IDFREE_SOURCE_LINK_DIM,
+    CONTEXT_IDFREE_SOURCE_NAME_DIM,
     DEFAULT_LATENT_DIM,
     FALLBACK_CONTEXT_OFF_DIM,
     FALLBACK_CONTEXT_ON_DIM,
@@ -209,7 +209,7 @@ def _run(cmd: List[str], what: str, dry_run: bool) -> None:
 
 
 def ensure_idfree_context(dim: int, *, fold_idx: Optional[int] = None, dry_run: bool = False) -> Path:
-    """Extract `context` with Source/Domain switched off and train its VAE
+    """Extract `context` with Source Name/Source Link switched off and train its VAE
     into an isolated cache, reusing whatever is already fresh on disk.
     Returns the latent dir holding {train,val,test}.pkl for that dim.
 
@@ -244,8 +244,8 @@ def ensure_idfree_context(dim: int, *, fold_idx: Optional[int] = None, dry_run: 
             [python_executable(), "main.py", *corpus_flags,
              "--preprocess_text", "--extract_context",
              "--context_output_dir", str(raw_dir.relative_to(BASE_DIR)),
-             "--context_source_dim", str(CONTEXT_IDFREE_SOURCE_DIM),
-             "--context_domain_dim", str(CONTEXT_IDFREE_DOMAIN_DIM)],
+             "--context_source_name_dim", str(CONTEXT_IDFREE_SOURCE_NAME_DIM),
+             "--context_source_link_dim", str(CONTEXT_IDFREE_SOURCE_LINK_DIM)],
             f"identity-free context extract ({tag})", dry_run,
         )
 

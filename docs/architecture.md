@@ -21,7 +21,7 @@ Four independent feature families are extracted per article:
 - **Semantic** — XLM-RoBERTa embeddings capturing the deep contextual meaning of the text: what the article is actually saying. This is the signal most existing fake-news detectors rely on almost exclusively, so it serves here as the baseline representation the other three families complement.
 - **Emotion/Sentiment** — `pysentimiento` emotion and sentiment probabilities plus 13 handcrafted lexical signals (exclamation/question density, uppercase ratio, emoji use, sensational-intensifier words, repeated punctuation, etc.). Captures the affective and sensational load of the writing — outrage, fear, or clickbait framing — independent of what the text is actually reporting.
 - **Style** — stylometry via spaCy/textstat/wordfreq: readability, formality, syntactic complexity, lexical diversity, POS distribution, an OOV/typo-rate proxy, and 17 extra signals (hedging language, passive/impersonal constructions, sentence-length burstiness, etc.). Captures *how* something is written, independent of topic or sentiment — a known correlate of journalistic quality vs. hastily-produced disinformation.
-- **Context** — deterministic hash embeddings (no model, no training required) of source, domain, topic, and author, plus a normalized article-age feature and binary flags for whether each field was even populated. Captures *where*, *when*, and *by whom* a piece was published — publication metadata that is independent of the article's text, where even missing metadata (no byline, no date) is itself a signal.
+- **Context** — deterministic hash embeddings (no model, no training required) of source name, source link, domain (topic category), and author, plus a normalized article-age feature and binary flags for whether each field was even populated. Captures *where*, *when*, and *by whom* a piece was published — publication metadata that is independent of the article's text, where even missing metadata (no byline, no date) is itself a signal.
 
 Each family is compressed independently by its own VAE, and the resulting latent spaces are concatenated directly (no shared projection stage) before entering the classifier. The whole pipeline is driven by `main.py` flags — see `CLAUDE.md` for the exact execution sequence. Section 3 below documents the exact business rules (formulas, thresholds, output schemas) behind each family.
 
@@ -39,7 +39,7 @@ flowchart TD
   C --> D1["Semantic extractor\nXLM-RoBERTa, mean/CLS/attention pooling\n~1024 dims"]
   C --> D2["Emotion extractor\npysentimiento probs + lexical signals\n~23 dims"]
   C --> D3["Style extractor\nspaCy/textstat/wordfreq stylometry\n~35 dims"]
-  C --> D4["Context extractor\nhashed Source/Domain/Topic/Author + age\n~103 dims"]
+  C --> D4["Context extractor\nhashed Source Name/Source Link/Domain/Author + age\n~103 dims"]
 
   D1 --> E1["VAE semantic (β-VAE, Keras)\nlatent_dim=128 (default)"]
   D2 --> E2["VAE emotion (β-VAE, Keras)\nlatent_dim=16 (default)"]
@@ -120,9 +120,9 @@ Each extractor answers a different question about the article. This section docu
 **What it captures**: publication metadata — *where* and *when* a piece was published, and by whom — as a signal independent of the article's text. No model, no training: purely deterministic feature hashing (MD5-based), so it works out of the box on any corpus with the relevant columns.
 
 - **Hash embeddings** (signed feature hashing, `n_hashes=2` independent hash draws combined per value to reduce collision bias), one fixed-size vector per categorical field:
-  - `ctx_source_emb_*` (32 dims default) — the outlet/source name.
-  - `ctx_domain_emb_*` (32 dims default) — the domain parsed from the article's `Link` (`www.` stripped, lowercased).
-  - `ctx_topic_emb_*` (16 dims default) — the `Topic` field.
+  - `ctx_source_name_emb_*` (32 dims default) — the outlet/source name.
+  - `ctx_source_link_emb_*` (32 dims default) — the domain parsed from the article's `Link` (`www.` stripped, lowercased).
+  - `ctx_domain_emb_*` (16 dims default) — the `Topic` field (topic category, renamed "Domain" to match conventional usage in the literature).
   - `ctx_author_emb_*` (16 dims default) — the byline, taken from an explicit author column if configured, otherwise heuristically parsed from the URL path (`/author/<name>/`, `/autor/<name>/`) or query string.
 - **`ctx_age_days`** — article age relative to a reference datetime (defaults to "now" UTC), capped to ±10 years (3650 days) and normalized to roughly `[-1, 1]`. Supports Unix timestamps, ISO 8601, and several `dd/mm/yyyy`-style formats; falls back to `-1.0` if no date is configured or parsing fails.
 - **Presence flags** (`ctx_has_link`, `ctx_has_domain`, `ctx_has_source`, `ctx_has_topic`, `ctx_has_author`, `ctx_has_date`) — binary indicators of whether each field was actually populated, since missing metadata is itself informative (e.g. fake news sites more often omit bylines or dates).

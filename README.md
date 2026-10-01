@@ -51,7 +51,7 @@ Each input sample is processed through independent extractors:
   - POS distributions  
   - Stylometric signals  
 - **Context extractor**
-  - Source, domain, topic embeddings  
+  - Source name, source link, domain embeddings  
   - Metadata features (age, presence flags)
 
 ---
@@ -205,9 +205,9 @@ python main.py --corpus_mode source_disjoint --source_split_n 5 --source_split_i
 
 VAE and KAN hyperparameters are **fixed** (`experiment_config.FINAL_HPARAMS`) — an earlier 1350-run one-knob-at-a-time sweep (`results_old_3/orchestrator_phase3.jsonl`) found no setting that beat `main.py`'s defaults by more than seed noise; only `vae_beta=4.0` clearly hurt. The lone exception is `kan_hidden_dim` (32 vs 64 was a coin flip), kept as the single swept axis (`HIDDEN_DIM_GRID`).
 
-1. **Phase 1 — `context` latent dimension, per identity mode.** Only the `context` branch is swept (the other three use `main.py`'s default dims). Two sub-sweeps of `context` alone: identity **ON** (`Source`/`Domain` hash embeddings on, dims `[8,16,32,64,86]`) and identity **OFF** (`--context_source_dim 0 --context_domain_dim 0`, dims `[4,8,16,23]`). (5+4) × 3 seeds = **27 runs**. Ranks dims *within each mode*. → `results/phase1_top.json`.
+1. **Phase 1 — `context` latent dimension, per identity mode.** Only the `context` branch is swept (the other three use `main.py`'s default dims). Two sub-sweeps of `context` alone: identity **ON** (`Source Name`/`Source Link` hash embeddings on, dims `[8,16,32,64,86]`) and identity **OFF** (`--context_source_name_dim 0 --context_source_link_dim 0`, dims `[4,8,16,23]`). (5+4) × 3 seeds = **27 runs**. Ranks dims *within each mode*. → `results/phase1_top.json`.
 2. **Phase 2 — standard-split evaluation.** All 15 non-empty extractor combos; the 8 that include `context` run twice (identity ON / OFF); each of those 23 combo-variants at both `kan_hidden_dim` values; × 3 seeds = **138 runs** on the fixed train/val/test split. Nothing is filtered. → `results/phase2_top.json` (23 combo-variants ranked by validation F1, test metrics alongside).
-3. **Phase 3 — source-disjoint validation.** The same 23 combo-variants × 2 `hidden_dim` × 3 seeds × 5 source-disjoint folds (`--corpus_mode source_disjoint`) = **690 runs** — the definitive test of the Source/Domain leakage in "Known Limitations & Caveats" below. The Phase 2 vs Phase 3 contrast quantifies how much of the standard-split F1 was outlet memorization. → `results/phase3_per_fold.json` + `results/phase3_top.json` (23 ranked, no single collapsed winner).
+3. **Phase 3 — source-disjoint validation.** The same 23 combo-variants × 2 `hidden_dim` × 3 seeds × 5 source-disjoint folds (`--corpus_mode source_disjoint`) = **690 runs** — the definitive test of the Source Name/Source Link leakage in "Known Limitations & Caveats" below. The Phase 2 vs Phase 3 contrast quantifies how much of the standard-split F1 was outlet memorization. → `results/phase3_per_fold.json` + `results/phase3_top.json` (23 ranked, no single collapsed winner).
 
 **Total: 27 + 138 + 690 = 855 KAN runs.**
 
@@ -325,38 +325,40 @@ classification
 
 ## ⚠️ Known Limitations & Caveats
 
-**Source/Domain leakage inflates the context branch's contribution.** In the
-current corpus split, `Source` (news outlet) almost perfectly determines the
-label within `train` — only 5 of 197 train sources publish both `Fake` and
-`True` articles — and 43% of `test` sources (and domains, derived from
-`Link`) also appear in `train`. The `context` extractor
-(`src/features/context_extractor.py`) hashes `Source` and `Domain` directly,
-so part of its contribution to classifier performance is the model
-memorizing "this outlet always publishes Fake," not genuine contextual or
-stylistic signal.
+**Source Name/Source Link leakage inflates the context branch's
+contribution.** In the current corpus split, `Source` (news outlet) almost
+perfectly determines the label within `train` — only 5 of 197 train sources
+publish both `Fake` and `True` articles — and 43% of `test` sources (and
+source links, derived from `Link`) also appear in `train`. The `context`
+extractor (`src/features/context_extractor.py`) hashes the outlet name and
+its URL-derived domain directly (as Source Name and Source Link
+respectively), so part of its contribution to classifier performance is the
+model memorizing "this outlet always publishes Fake," not genuine
+contextual or stylistic signal.
 
 A controlled ablation (same 10 fixed seeds, same KAN/VAE architecture,
-`--context_source_dim 0 --context_domain_dim 0` to isolate Topic+age) makes
-this concrete — test F1 on the merged latent pipeline:
+`--context_source_name_dim 0 --context_source_link_dim 0` to isolate
+Domain+age) makes this concrete — test F1 on the merged latent pipeline:
 
 | Variant | Mean F1 | Range |
 |---|---|---|
-| Full context (Source + Domain + Topic) | 0.8604 | 0.8396 – 0.8956 |
-| Context without Source/Domain (Topic + age only) | 0.7449 | 0.6973 – 0.7829 |
+| Full context (Source Name + Source Link + Domain) | 0.8604 | 0.8396 – 0.8956 |
+| Context without Source Name/Source Link (Domain + age only) | 0.7449 | 0.6973 – 0.7829 |
 | No context branch at all | 0.7559 | 0.7294 – 0.7858 |
 
-Every seed with full context outperformed every seed without Source/Domain
-identity (non-overlapping ranges) — context stripped of outlet identity is
-statistically indistinguishable from dropping it entirely. In other words,
-**the identity-free performance ceiling of this pipeline on the current
-split may be closer to F1 ≈ 0.75–0.76**, not the ≈0.90 the full pipeline
-reports; Topic and article age appear to carry little signal on their own.
-Results and discussion involving `context` or aggregate F1 should flag this
-possibility, since some share of it plausibly reflects source
-classification rather than fake-news style detection — though this
-ablation alone isolates the *feature* (removing Source/Domain from
-`context`), not the *split* (train and test can still share outlets), so it
-doesn't by itself rule out other explanations for the gap.
+Every seed with full context outperformed every seed without Source
+Name/Source Link identity (non-overlapping ranges) — context stripped of
+outlet identity is statistically indistinguishable from dropping it
+entirely. In other words, **the identity-free performance ceiling of this
+pipeline on the current split may be closer to F1 ≈ 0.75–0.76**, not the
+≈0.90 the full pipeline reports; Domain (topic category) and article age
+appear to carry little signal on their own. Results and discussion
+involving `context` or aggregate F1 should flag this possibility, since
+some share of it plausibly reflects source classification rather than
+fake-news style detection — though this ablation alone isolates the
+*feature* (removing Source Name/Source Link from `context`), not the
+*split* (train and test can still share outlets), so it doesn't by itself
+rule out other explanations for the gap.
 
 **Update (2026-09-02/03) — suggestive, not yet conclusive.** A
 source-disjoint re-split (no outlet appearing in both train and test,
@@ -374,7 +376,7 @@ test set via search).
 The current 3-phase plan folds both concerns in directly: Phase 3
 (`scripts/orchestrator_phase3.py`) runs every extractor combination across
 source-disjoint folds, with `context` tested both with and without
-`Source`/`Domain` (identity ON/OFF) end to end, and every phase selects on
+`Source Name`/`Source Link` (identity ON/OFF) end to end, and every phase selects on
 validation F1 only. Until Phase 2/3 have run under this plan, treat the
 leakage's exact magnitude as **an open, actively investigated question —
 plausible and reasonably well-motivated, not an established fact** — and

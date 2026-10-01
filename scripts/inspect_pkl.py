@@ -361,9 +361,9 @@ def summarize_feature_groups(X: np.ndarray, feature_names: List[str]) -> None:
     print_header("FEATURE GROUPS (HEURISTIC)")
 
     groups = {
-        "source": [i for i, f in enumerate(feature_names) if "source_emb" in f],
+        "source_name": [i for i, f in enumerate(feature_names) if "source_name_emb" in f],
+        "source_link": [i for i, f in enumerate(feature_names) if "source_link_emb" in f],
         "domain": [i for i, f in enumerate(feature_names) if "domain_emb" in f],
-        "topic": [i for i, f in enumerate(feature_names) if "topic_emb" in f],
         "author": [i for i, f in enumerate(feature_names) if "author_emb" in f],
         "age": [i for i, f in enumerate(feature_names) if "age" in f],
         "flags": [i for i, f in enumerate(feature_names) if "has_" in f],

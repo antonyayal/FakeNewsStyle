@@ -7,7 +7,7 @@ Goal
 ----
 Compute a standard set of metrics (accuracy, ROC/PR-AUC, calibration,
 confusion matrix, etc.) from (y_true, y_prob) and persist them, plus an
-optional per-Topic accuracy/F1 breakdown for error analysis.
+optional per-Domain (topic category) accuracy/F1 breakdown for error analysis.
 
 Why this file exists
 --------------------
@@ -20,13 +20,13 @@ Key functions
 -------------
 - evaluate_binary_classifier(y_true, y_prob, threshold=0.5, n_bins=10, ...)
   -> dict with accuracy, balanced_accuracy, precision/recall/specificity,
-  f1, roc_auc, pr_auc, log_loss, brier_score, ece (expected_calibration_error),
+  f1 (macro over Fake/Real), f1_fake (Fake-class F1), roc_auc, pr_auc, log_loss, brier_score, ece (expected_calibration_error),
   entropy_mean/std, confusion matrix counts, mcc, and optional
   n_params/train_time_sec passthrough fields.
 - save_metrics(metrics, output_dir, prefix) -> writes both
   {prefix}.json and {prefix}.csv (the source of train/val/test_metrics.*
   files under data/07_kan_runs/).
-- compute_topic_breakdown(y_true, y_prob, topics) -> per-Topic accuracy/F1,
+- compute_domain_breakdown(y_true, y_prob, domains) -> per-Domain accuracy/F1,
   used for the test-split breakdown in main.py's --train_kan step.
 
 Usage (example)
@@ -135,7 +135,12 @@ def evaluate_binary_classifier(
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "specificity": float(specificity),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        # f1 is macro-F1 (mean of the Fake and Real per-class F1), the metric
+        # reported by M3FEND and the multi-domain FND literature; RANKING_METRIC
+        # and every report read this key. f1_fake keeps the Fake-class
+        # (positive) F1 that f1 used to hold before 2026-09-29.
+        "f1": float(f1_score(y_true, y_pred, labels=[0, 1], average="macro", zero_division=0)),
+        "f1_fake": float(f1_score(y_true, y_pred, zero_division=0)),
 
         # Ranking / probability metrics
         "roc_auc": float(roc_auc_score(y_true, y_prob)),
@@ -167,41 +172,44 @@ def evaluate_binary_classifier(
     return metrics
 
 
-def compute_topic_breakdown(y_true, y_prob, topics, threshold: float = 0.5) -> dict | None:
+def compute_domain_breakdown(y_true, y_prob, domains, threshold: float = 0.5) -> dict | None:
     """
-    Per-Topic accuracy/F1 breakdown for a single split, to check whether the
-    model depends on topics over-represented in train.
+    Per-Domain (topic category) accuracy/F1 breakdown for a single split, to
+    check whether the model depends on domains over-represented in train.
 
-    Assumes y_true/y_prob and topics are already positionally aligned (same
+    Assumes y_true/y_prob and domains are already positionally aligned (same
     row order as the corpus PKL the predictions were made on) -- callers are
     responsible for that alignment; this function does not join by Id.
-    Returns None if topics is empty/None or lengths don't match, so callers
-    can store a null topic_breakdown rather than fail the whole run.
+    Returns None if domains is empty/None or lengths don't match, so callers
+    can store a null domain_breakdown rather than fail the whole run.
     """
-    if topics is None:
+    if domains is None:
         return None
 
     y_true = np.asarray(y_true)
     y_prob = np.asarray(y_prob)
-    topics = np.asarray(topics)
+    domains = np.asarray(domains)
 
-    if len(topics) != len(y_true):
+    if len(domains) != len(y_true):
         return None
 
     y_pred = (y_prob >= threshold).astype(int)
 
     breakdown = {}
-    for topic in sorted(set(topics.tolist())):
-        mask = topics == topic
+    for domain in sorted(set(domains.tolist())):
+        mask = domains == domain
         n = int(mask.sum())
         if n == 0:
             continue
 
         yt, yp = y_true[mask], y_pred[mask]
-        breakdown[str(topic)] = {
+        breakdown[str(domain)] = {
             "n": n,
             "accuracy": float(accuracy_score(yt, yp)),
-            "f1": float(f1_score(yt, yp, zero_division=0)),
+            # macro over the classes present in this domain (a single-class
+            # domain would otherwise get a spurious 0 for the absent class)
+            "f1": float(f1_score(yt, yp, average="macro", zero_division=0)),
+            "f1_fake": float(f1_score(yt, yp, zero_division=0)),
         }
 
     return breakdown or None

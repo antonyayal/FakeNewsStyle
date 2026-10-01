@@ -4,7 +4,7 @@
 Shared config for the 3-phase experiment plan (Option A):
 
   Phase 1  -- context VAE latent dimension, swept for both identity modes
-              (Source/Domain hash embeddings ON vs. OFF). The other three
+              (Source Name/Source Link hash embeddings ON vs. OFF). The other three
               branches are NOT swept; they use main.py's default dims, since
               an earlier full per-branch sweep showed the latent size barely
               moves F1 within a branch.
@@ -68,10 +68,11 @@ FINAL_HPARAMS = {
 HIDDEN_DIM_GRID = [32, 64]
 
 # ---- Phase 1: context latent dimension, per identity mode --------------
-# identity ON  -> full context raw dim 86 (32 source + 32 domain + 16 topic
-#                 + 0 author + 1 age + 5 flags), main.py's context defaults.
-# identity OFF -> --context_source_dim 0 --context_domain_dim 0, raw dim
-#                 shrinks to 23 (16 topic + 1 age + 6 flags).
+# identity ON  -> full context raw dim 86 (32 source name + 32 source link
+#                 + 16 domain + 0 author + 1 age + 5 flags), main.py's
+#                 context defaults.
+# identity OFF -> --context_source_name_dim 0 --context_source_link_dim 0,
+#                 raw dim shrinks to 23 (16 domain + 1 age + 6 flags).
 PHASE1_CONTEXT_ON_DIMS = [8, 16, 32, 64, 86]
 PHASE1_CONTEXT_OFF_DIMS = [4, 8, 16, 23]
 PHASE1_TOP_K = 2  # kept per identity mode in phase1_top.json
@@ -81,9 +82,9 @@ PHASE1_TOP_K = 2  # kept per identity mode in phase1_top.json
 FALLBACK_CONTEXT_ON_DIM = DEFAULT_LATENT_DIM["context"]
 FALLBACK_CONTEXT_OFF_DIM = 16
 
-# ---- Identity-free context (Source/Domain switched off) ---------------
-CONTEXT_IDFREE_SOURCE_DIM = 0
-CONTEXT_IDFREE_DOMAIN_DIM = 0
+# ---- Identity-free context (Source Name/Source Link switched off) -----
+CONTEXT_IDFREE_SOURCE_NAME_DIM = 0
+CONTEXT_IDFREE_SOURCE_LINK_DIM = 0
 
 # ---- Source-disjoint folds (Phase 3) ---------------------------------
 # Must match main.py's --source_split_n / --source_split_seed defaults so a
@@ -91,6 +92,12 @@ CONTEXT_IDFREE_DOMAIN_DIM = 0
 # cached folds.
 SOURCE_SPLIT_N_FOLDS = 5
 SOURCE_SPLIT_SEED = 20260821
+
+# Device for the transformer-based extractors when an orchestrator has to
+# (re-)extract features (Phase 3 per-fold prep). main.py defaults both to cpu,
+# which is very slow for XLM-R large at 512 tokens; main.py falls back to cpu
+# on its own if CUDA isn't available.
+EXTRACT_DEVICE = "cuda"
 
 # ---- Ranking metric --------------------------------------------------
 RANKING_METRIC = "f1"

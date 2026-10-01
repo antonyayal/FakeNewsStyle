@@ -9,9 +9,9 @@ per-branch sweep (old Phase 1) showed the latent size moves F1 by less than
 seed noise within a branch, so re-sweeping all four is not worth the runs.
 
 Two independent sub-sweeps, `context` alone (`--exclude_*` on the other 3):
-  - identity ON  : Source/Domain hash embeddings on (main.py defaults),
-                   dims PHASE1_CONTEXT_ON_DIMS.
-  - identity OFF : --context_source_dim 0 --context_domain_dim 0,
+  - identity ON  : Source Name/Source Link hash embeddings on (main.py
+                   defaults), dims PHASE1_CONTEXT_ON_DIMS.
+  - identity OFF : --context_source_name_dim 0 --context_source_link_dim 0,
                    dims PHASE1_CONTEXT_OFF_DIMS (capped at the 23-d
                    identity-free raw dimension).
 

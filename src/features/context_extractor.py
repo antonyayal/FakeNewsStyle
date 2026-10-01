@@ -1,7 +1,7 @@
 # src/features/context_extractor.py
 # -*- coding: utf-8 -*-
 """
-Context feature extractor (Source/Domain/Topic/Author + article age).
+Context feature extractor (Source Name/Source Link/Domain/Author + article age).
 
 Goal
 ----
@@ -11,24 +11,38 @@ it as a new PKL.
 
 Why this file exists
 --------------------
-- Source/Domain/Topic/Author are categorical, high-cardinality fields with no
-  natural numeric encoding -- feature hashing gives a fixed-size vector
-  without fitting a vocabulary.
+- Source Name/Source Link/Domain/Author are categorical, high-cardinality
+  fields with no natural numeric encoding -- feature hashing gives a
+  fixed-size vector without fitting a vocabulary.
 - Article age is a weak but cheap temporal signal when a date column exists.
+
+Terminology note
+-----------------
+The raw corpus columns are `Source` (outlet name), `Link` (article URL), and
+`Topic` (topic category) -- these raw column names never change. What this
+extractor calls the derived concepts built from them does:
+- `Source` (outlet name)              -> "Source Name" embedding
+- web domain parsed out of `Link`     -> "Source Link" embedding (a second
+  fingerprint of the same outlet, not a topic-like concept)
+- `Topic` (topic category)            -> "Domain" embedding, matching the
+  conventional meaning of "domain" (topic category) used in the fake-news-
+  detection literature (e.g. M3FEND), instead of colliding with it.
 
 Outputs
 -------
 For each input PKL (train/val/test), creates an output PKL (dict payload,
 same schema as style_extractor.py) with:
-- X : np.ndarray [N, D] -- [source_emb..., domain_emb..., topic_emb...,
-  author_emb..., ctx_age_days, ctx_has_link, ctx_has_domain, ctx_has_source,
-  ctx_has_topic, ctx_has_author, ctx_has_date]
+- X : np.ndarray [N, D] -- [source_name_emb..., source_link_emb...,
+  domain_emb..., author_emb..., ctx_age_days, ctx_has_link,
+  ctx_has_source_link, ctx_has_source_name, ctx_has_domain, ctx_has_author,
+  ctx_has_date]
 - feature_names : list[str], stable order matching X's columns
 - ids, y (labels), meta (config snapshot + feature_dim)
 
 Expected input columns (configurable via ContextExtractorConfig)
 ------------------------------------------------------------------
-- topic_column, source_column, link_column (required)
+- topic_column, source_column, link_column (required) -- these point at the
+  raw corpus columns `Topic`/`Source`/`Link` and are not renamed
 - author_column, date_column (optional; if absent, ctx_has_author/
   ctx_has_date stay 0 and those embeddings stay all-zero -- set the
   corresponding *_dim to 0 rather than leaving dead dimensions in the
@@ -39,7 +53,7 @@ Usage (example)
 from pathlib import Path
 from src.features.context_extractor import ContextExtractor, ContextExtractorConfig
 
-extractor = ContextExtractor(ContextExtractorConfig(source_dim=32, domain_dim=32))
+extractor = ContextExtractor(ContextExtractorConfig(source_name_dim=32, source_link_dim=32))
 extractor.save_features_pkl(rows=df.to_dict(orient="records"), output_path=Path("out.pkl"))
 """
 
@@ -64,7 +78,8 @@ class ContextExtractorConfig:
     """
     Context features for FakeNewsCorpusSpanish.
 
-    Input columns expected (configurable):
+    Input columns expected (configurable) -- these are the raw corpus column
+    names and are not renamed:
     - topic_column: e.g. "Topic"
     - source_column: e.g. "Source"
     - link_column: e.g. "Link"
@@ -91,9 +106,9 @@ class ContextExtractorConfig:
     date_column: Optional[str] = None           # e.g. "Date" / "Published" / "created_at"
 
     # Hash-embedding dimensions
-    source_dim: int = 32
-    domain_dim: int = 32
-    topic_dim: int = 16
+    source_name_dim: int = 32   # outlet name (raw "Source" column)
+    source_link_dim: int = 32   # outlet's web domain, parsed from "Link"
+    domain_dim: int = 16        # topic category (raw "Topic" column)
     author_dim: int = 16
 
     # Hashing behavior
@@ -118,22 +133,23 @@ class ContextExtractor:
     Context Feature Extractor.
 
     Extracted features:
-    - Domain / Source:
-        - Source (outlet) -> hash-embedding
-        - Domain from the URL (extracted from Link) -> hash-embedding
+    - Source Name / Source Link:
+        - Source Name: the outlet (raw "Source" column) -> hash-embedding
+        - Source Link: the web domain parsed from "Link" -> hash-embedding
+          (a second fingerprint of the same outlet, not a topic-like signal)
     - Author:
         - if an author column exists -> hash-embedding
         - otherwise, a conservative URL heuristic (/author/<name>/ or ?author=)
-    - Topic category (Topic) -> hash-embedding
+    - Domain (topic category, raw "Topic" column) -> hash-embedding
     - Time:
         - Article age in days (if date_column exists), relative to reference_datetime_utc
         - optionally normalized to [-1, 1]
 
     Output vector (fixed order):
-      [source_emb..., domain_emb..., topic_emb..., author_emb..., age_days, flags...]
+      [source_name_emb..., source_link_emb..., domain_emb..., author_emb..., age_days, flags...]
 
     Flags:
-      ctx_has_link, ctx_has_domain, ctx_has_source, ctx_has_topic, ctx_has_author, ctx_has_date
+      ctx_has_link, ctx_has_source_link, ctx_has_source_name, ctx_has_domain, ctx_has_author, ctx_has_date
     """
 
     def __init__(self, config: ContextExtractorConfig = ContextExtractorConfig()):
@@ -188,13 +204,13 @@ class ContextExtractor:
         source = self._get_str(row, c.source_column)
         link = self._get_str(row, c.link_column)
 
-        domain = self._domain_from_url(link) if link else ""
+        source_link = self._domain_from_url(link) if link else ""
         author = self._get_author(row, link)
 
         # Hash embeddings
-        src_vec = self._hash_embed(source, c.source_dim, field="source")
-        dom_vec = self._hash_embed(domain, c.domain_dim, field="domain")
-        top_vec = self._hash_embed(topic, c.topic_dim, field="topic")
+        source_name_vec = self._hash_embed(source, c.source_name_dim, field="source_name")
+        source_link_vec = self._hash_embed(source_link, c.source_link_dim, field="source_link")
+        domain_vec = self._hash_embed(topic, c.domain_dim, field="domain")
         aut_vec = self._hash_embed(author, c.author_dim, field="author")
 
         # Age days (already normalized if configured that way)
@@ -202,17 +218,17 @@ class ContextExtractor:
 
         # Build dict with stable keys
         feats: Dict[str, float] = {}
-        feats.update({f"ctx_source_emb_{i}": float(src_vec[i]) for i in range(c.source_dim)})
-        feats.update({f"ctx_domain_emb_{i}": float(dom_vec[i]) for i in range(c.domain_dim)})
-        feats.update({f"ctx_topic_emb_{i}": float(top_vec[i]) for i in range(c.topic_dim)})
+        feats.update({f"ctx_source_name_emb_{i}": float(source_name_vec[i]) for i in range(c.source_name_dim)})
+        feats.update({f"ctx_source_link_emb_{i}": float(source_link_vec[i]) for i in range(c.source_link_dim)})
+        feats.update({f"ctx_domain_emb_{i}": float(domain_vec[i]) for i in range(c.domain_dim)})
         feats.update({f"ctx_author_emb_{i}": float(aut_vec[i]) for i in range(c.author_dim)})
 
         feats["ctx_age_days"] = float(age_days)
 
         feats["ctx_has_link"] = 1.0 if bool(link) else 0.0
-        feats["ctx_has_domain"] = 1.0 if bool(domain) else 0.0
-        feats["ctx_has_source"] = 1.0 if bool(source) else 0.0
-        feats["ctx_has_topic"] = 1.0 if bool(topic) else 0.0
+        feats["ctx_has_source_link"] = 1.0 if bool(source_link) else 0.0
+        feats["ctx_has_source_name"] = 1.0 if bool(source) else 0.0
+        feats["ctx_has_domain"] = 1.0 if bool(topic) else 0.0
         feats["ctx_has_author"] = 1.0 if bool(author) else 0.0
         feats["ctx_has_date"] = 1.0 if (c.date_column and self._get_str(row, c.date_column)) else 0.0
 
@@ -224,16 +240,16 @@ class ContextExtractor:
 
         c = self.config
         names: List[str] = []
-        names += [f"ctx_source_emb_{i}" for i in range(c.source_dim)]
+        names += [f"ctx_source_name_emb_{i}" for i in range(c.source_name_dim)]
+        names += [f"ctx_source_link_emb_{i}" for i in range(c.source_link_dim)]
         names += [f"ctx_domain_emb_{i}" for i in range(c.domain_dim)]
-        names += [f"ctx_topic_emb_{i}" for i in range(c.topic_dim)]
         names += [f"ctx_author_emb_{i}" for i in range(c.author_dim)]
         names += ["ctx_age_days"]
         names += [
             "ctx_has_link",
+            "ctx_has_source_link",
+            "ctx_has_source_name",
             "ctx_has_domain",
-            "ctx_has_source",
-            "ctx_has_topic",
             "ctx_has_author",
             "ctx_has_date",
         ]
@@ -249,9 +265,9 @@ class ContextExtractor:
             "id_column": self.config.id_column,
             "author_column": self.config.author_column,
             "date_column": self.config.date_column,
-            "source_dim": self.config.source_dim,
+            "source_name_dim": self.config.source_name_dim,
+            "source_link_dim": self.config.source_link_dim,
             "domain_dim": self.config.domain_dim,
-            "topic_dim": self.config.topic_dim,
             "author_dim": self.config.author_dim,
             "n_hashes": self.config.n_hashes,
             "signed": self.config.signed,
@@ -322,7 +338,7 @@ class ContextExtractor:
                         "link_column": self.config.link_column,
                         "author_column": self.config.author_column,
                         "date_column": self.config.date_column,
-                        "dims": f"src={self.config.source_dim},dom={self.config.domain_dim},top={self.config.topic_dim},aut={self.config.author_dim}",
+                        "dims": f"src_name={self.config.source_name_dim},src_link={self.config.source_link_dim},dom={self.config.domain_dim},aut={self.config.author_dim}",
                         "n_hashes": self.config.n_hashes,
                         "signed": self.config.signed,
                         "l2_normalize": self.config.l2_normalize,
@@ -604,5 +620,5 @@ class ContextExtractor:
 Tools used:
 - python stdlib: urllib.parse (URL parsing), datetime (age calculation), hashlib (hash embedding), re (heuristics)
 - numpy: vector construction and normalization
-- feature hashing (hash embeddings), deterministic, for categoricals (Source/Domain/Topic/Author)
+- feature hashing (hash embeddings), deterministic, for categoricals (Source Name/Source Link/Domain/Author)
 """

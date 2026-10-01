@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from experiment_config import RANKING_METRIC, SEEDS  # noqa: E402
 
 METRIC_COLUMNS = [
-    "accuracy", "balanced_accuracy", "precision", "recall", "specificity", "f1",
+    "accuracy", "balanced_accuracy", "precision", "recall", "specificity", "f1", "f1_fake",
     "roc_auc", "pr_auc", "mcc", "log_loss", "brier_score", "ece",
     "entropy_mean", "entropy_std", "n_params", "train_time_sec",
 ]

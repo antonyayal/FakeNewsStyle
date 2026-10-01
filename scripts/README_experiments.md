@@ -21,7 +21,7 @@ k-fold normal, control identity-free de `context`) se colapsaron:
 - **K-fold normal eliminado.** Coincidía con el split estándar (no ve el
   leakage de `Source`), así que no aporta sobre la Fase 2.
 - **`context` identity-free integrado.** Ya no es una fase aparte: cada
-  combo que incluye `context` se corre dos veces, con `Source`/`Domain`
+  combo que incluye `context` se corre dos veces, con `Source Name`/`Source Link`
   encendidos y apagados, en las Fases 2 y 3.
 
 Archivos:
@@ -57,9 +57,9 @@ Solo se barre `context` (los otros 3 branches usan los defaults de
 la dim dentro de un branch mueve el F1 menos que el ruido de semilla).
 
 Dos sub-sweeps de `context` solo (`--exclude_*` en los otros 3):
-- **identity ON** — `Source`/`Domain` encendidos (defaults de `main.py`),
+- **identity ON** — `Source Name`/`Source Link` encendidos (defaults de `main.py`),
   dims `PHASE1_CONTEXT_ON_DIMS` = `[8, 16, 32, 64, 86]`.
-- **identity OFF** — `--context_source_dim 0 --context_domain_dim 0`, dims
+- **identity OFF** — `--context_source_name_dim 0 --context_source_link_dim 0`, dims
   `PHASE1_CONTEXT_OFF_DIMS` = `[4, 8, 16, 23]` (capado en la dim cruda
   identity-free de 23).
 

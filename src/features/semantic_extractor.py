@@ -38,7 +38,7 @@ extract_semantic_features_for_splits(
     output_dir=Path("data/03_features_raw/semantic"),
     log_dir=Path("logs/features"),
     pooling="attention",  # "mean" | "cls" | "attention"
-    max_len=256,
+    max_len=512,
     batch_size=8,
     device="cuda"  # or "cpu"
 )
@@ -137,7 +137,7 @@ class TextDataset(Dataset):
 class ExtractConfig:
     model_name: str = MODEL_NAME_DEFAULT
     pooling: str = "mean"  # "mean" | "cls" | "attention"
-    max_len: int = 256
+    max_len: int = 512  # XLM-R limit (514 positions incl. special tokens); was 256
     batch_size: int = 8
     num_workers: int = 0
     device: str = "cpu"  # "cuda" if available
@@ -388,7 +388,7 @@ def extract_semantic_features_for_splits(
     log_dir: Path,
     pooling: str = "mean",
     model_name: str = MODEL_NAME_DEFAULT,
-    max_len: int = 256,
+    max_len: int = 512,
     batch_size: int = 8,
     device: str = "cpu",
     num_workers: int = 0,

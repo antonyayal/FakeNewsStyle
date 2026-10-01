@@ -72,7 +72,7 @@ def log_experiment_result(
     training_time_seconds: Optional[float] = None,
     num_parameters: Optional[int] = None,
     dataset_hash: Optional[str] = None,
-    topic_breakdown: Optional[Dict[str, Dict[str, Any]]] = None,
+    domain_breakdown: Optional[Dict[str, Dict[str, Any]]] = None,
     context_dims: Optional[Dict[str, int]] = None,
 ) -> Path:
     """
@@ -108,10 +108,11 @@ def log_experiment_result(
         "active_extractors": active_extractors,
         "excluded_extractors": excluded_extractors,
         "latent_dims": latent_dims,
-        # Hash-embedding widths of the context branch's identity fields. 0 means
-        # that field was switched off (the identity-free control run of Phase 6);
-        # the default is 32/32. None when the caller did not pass them (older
-        # records, or runs where context was excluded entirely).
+        # Hash-embedding widths of the context branch's identity fields
+        # (Source Name / Source Link). 0 means that field was switched off
+        # (the identity-free control run of Phase 6); the default is 32/32.
+        # None when the caller did not pass them (older records, or runs
+        # where context was excluded entirely).
         "context_dims": context_dims,
         "epochs": {
             "vae_epochs_requested": vae_epochs_requested,
@@ -126,7 +127,7 @@ def log_experiment_result(
             "num_parameters": num_parameters,
         },
         "dataset_hash": dataset_hash,
-        "topic_breakdown": topic_breakdown,
+        "domain_breakdown": domain_breakdown,
         "paths": {
             "kan_output_dir": str(kan_output_dir),
             "kan_checkpoint": str(kan_checkpoint_path),

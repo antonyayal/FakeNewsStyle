@@ -24,7 +24,7 @@ artículo:
 | **Semantic** (semántica) | De qué habla el texto | Embeddings de un modelo de lenguaje grande (XLM-RoBERTa) |
 | **Emotion** (emoción) | Tono emocional | Probabilidades de alegría/enojo/miedo, uso de mayúsculas, signos de exclamación |
 | **Style** (estilo) | Cómo está escrito, no qué dice | Legibilidad, diversidad léxica, ratios gramaticales |
-| **Context** (contexto) | Metadatos del artículo | Medio (`Source`), dominio web, tema (`Topic`), antigüedad |
+| **Context** (contexto) | Metadatos del artículo | Nombre del medio (Source Name), dominio web del medio (Source Link), tema (Domain), antigüedad |
 
 Cada rama se procesa por separado, se comprime a un espacio "latente" más
 pequeño (con un VAE), y luego todas las ramas comprimidas se concatenan y se
@@ -221,8 +221,10 @@ los artefactos de un modo con otro.
 ### 4.4 Context (`src/features/context_extractor.py`)
 
 - No usa NLP en absoluto ni entrena nada. Toma metadatos estructurados:
-  `Source` (medio), `Domain` (extraído de la URL en `Link`), `Topic`,
-  opcionalmente `Author`/fecha.
+  `Source` (medio, internamente "Source Name"), el dominio extraído de la
+  URL en `Link` (internamente "Source Link"), `Topic` (internamente
+  "Domain", para alinearse con el uso convencional de "domain" en la
+  literatura), opcionalmente `Author`/fecha.
 - Cada categoría se convierte a un vector de tamaño fijo con **feature
   hashing** determinístico (`_hash_embed`): se aplica MD5 al string y se usa
   para elegir un índice y un signo dentro de un vector de tamaño `dim`. Esto
@@ -380,7 +382,7 @@ evalúan train/val/test con `evaluate_binary_classifier`, que calcula:
 `save_metrics()` escribe tanto `{prefix}.json` como `{prefix}.csv` — de ahí
 salen los archivos `train/val/test_metrics.{json,csv}` en `data/07_kan_runs/`.
 
-También hay un **desglose por Topic** (`compute_topic_breakdown`) para ver
+También hay un **desglose por Domain** (`compute_domain_breakdown`) para ver
 si el modelo depende de temas sobre-representados en train — solo para el
 split de test, y solo si hay una columna `Topic` alineable posicionalmente.
 
@@ -422,8 +424,8 @@ excepción es `kan_hidden_dim` (32 vs 64 fue un volado), que se barre como
 ### Fase 1 — Dimensión latente de `context`, por modo de identidad
 Solo se barre la rama `context` (las otras 3 usan los defaults de
 `main.py`). Dos sub-sweeps de `context` solo: identidad **ON**
-(`Source`/`Domain` encendidos, dims `[8,16,32,64,86]`) e identidad **OFF**
-(`--context_source_dim 0 --context_domain_dim 0`, dims `[4,8,16,23]`).
+(`Source Name`/`Source Link` encendidos, dims `[8,16,32,64,86]`) e identidad **OFF**
+(`--context_source_name_dim 0 --context_source_link_dim 0`, dims `[4,8,16,23]`).
 (5+4) × 3 semillas = **27 corridas**. Elige la mejor dim *dentro de cada
 modo*. → `results/phase1_top.json`.
 
@@ -457,20 +459,23 @@ la sección "Known Limitations & Caveats" del `README.md`:
 
 - En el split original, **`Source` (el medio) casi determina perfectamente
   la etiqueta**: solo 5 de 197 medios en train publican tanto `Fake` como
-  `True`. Lo mismo pasa con `Domain` (derivado de la URL): solo 7 de 196.
+  `True`. Lo mismo pasa con el dominio derivado de la URL (internamente
+  "Source Link"): solo 7 de 196.
 - **43% de los medios/dominios del test también aparecen en train.**
-- El extractor `context` hashea `Source` y `Domain` directamente en su
-  embedding — así que parte de lo que el modelo "aprende" es simplemente
-  "este medio siempre publica Fake", no un patrón de estilo genuino.
+- El extractor `context` hashea el nombre del medio y su dominio web
+  directamente en su embedding (como Source Name y Source Link) — así que
+  parte de lo que el modelo "aprende" es simplemente "este medio siempre
+  publica Fake", no un patrón de estilo genuino.
 
 **Ablación controlada** (mismas 10 semillas, misma arquitectura, quitando
-`Source`/`Domain` del context extractor con `--context_source_dim 0
---context_domain_dim 0`, dejando solo Topic+edad):
+Source Name/Source Link del context extractor con
+`--context_source_name_dim 0 --context_source_link_dim 0`, dejando solo
+Domain+edad):
 
 | Variante | F1 medio | Rango |
 |---|---|---|
-| Context completo (Source+Domain+Topic) | 0.8604 | 0.8396 – 0.8956 |
-| Context sin Source/Domain (solo Topic+edad) | 0.7449 | 0.6973 – 0.7829 |
+| Context completo (Source Name+Source Link+Domain) | 0.8604 | 0.8396 – 0.8956 |
+| Context sin Source Name/Source Link (solo Domain+edad) | 0.7449 | 0.6973 – 0.7829 |
 | Sin rama context | 0.7559 | 0.7294 – 0.7858 |
 
 Cada semilla con context completo superó a **cada** semilla sin identidad de

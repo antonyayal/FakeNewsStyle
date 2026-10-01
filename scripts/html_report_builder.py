@@ -170,8 +170,8 @@ def flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "excluded_extractors": record.get("excluded_extractors", []),
         "combo": "+".join(record.get("active_extractors", [])) or "(none)",
         "latent_dims": record.get("latent_dims", {}),
-        # {source, domain} hash-embedding widths of the context branch; 0 = that
-        # identity field was switched off (Phase 6 control). None on older records.
+        # {source_name, source_link} hash-embedding widths of the context branch;
+        # 0 = that identity field was switched off (Phase 6 control). None on older records.
         "context_dims": record.get("context_dims"),
         "epochs": epochs,
         "vae_hyperparams": record.get("vae_hyperparams", {}),
@@ -193,7 +193,7 @@ def flatten_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "training_time_seconds": compute.get("training_time_seconds"),
         "num_parameters": compute.get("num_parameters"),
         "dataset_hash": record.get("dataset_hash"),
-        "topic_breakdown": record.get("topic_breakdown"),
+        "domain_breakdown": record.get("domain_breakdown"),
     }
 
 
@@ -367,25 +367,26 @@ function extractorBadges(list) {
   return list.map(m => `<span class="badge badge-${m}">${m}</span>`).join('');
 }
 
-// Whether the context branch's Source / Domain identity fields were on (dim > 0)
-// or off (dim = 0, the identity-free control of Phase 6). When the run record
-// doesn't carry context_dims, infer it: Phase 6 is the only protocol that
-// zeroes them, so a phase6 output path -> off, anything else -> the 32/32 CLI
-// default -> on. Inferred cells are marked with a trailing *.
+// Whether the context branch's Source Name / Source Link identity fields
+// were on (dim > 0) or off (dim = 0, the identity-free control of Phase 6).
+// When the run record doesn't carry context_dims, infer it: Phase 6 is the
+// only protocol that zeroes them, so a phase6 output path -> off, anything
+// else -> the 32/32 CLI default -> on. Inferred cells are marked with a
+// trailing *.
 function contextIdentityBools(r) {
   const cd = r.context_dims;
   if (cd) {
-    return { source: Number(cd.source) > 0, domain: Number(cd.domain) > 0,
-             srcDim: cd.source, domDim: cd.domain, assumed: false };
+    return { sourceName: Number(cd.source_name) > 0, sourceLink: Number(cd.source_link) > 0,
+             srcNameDim: cd.source_name, srcLinkDim: cd.source_link, assumed: false };
   }
   const kanDir = (r.paths || {}).kan_output_dir || '';
   const isPhase6 = /(^|[/_])phase6([/_]|$)/.test(kanDir);
-  return { source: !isPhase6, domain: !isPhase6, srcDim: null, domDim: null, assumed: true };
+  return { sourceName: !isPhase6, sourceLink: !isPhase6, srcNameDim: null, srcLinkDim: null, assumed: true };
 }
 function contextIdentityRank(r) {
   if (!r.active_extractors || !r.active_extractors.includes('context')) return -2;
   const s = contextIdentityBools(r);
-  return (s.source ? 2 : 0) + (s.domain ? 1 : 0);
+  return (s.sourceName ? 2 : 0) + (s.sourceLink ? 1 : 0);
 }
 function contextIdentityCell(r) {
   if (!r.active_extractors || !r.active_extractors.includes('context')) {
@@ -399,7 +400,7 @@ function contextIdentityCell(r) {
   const star = s.assumed
     ? ' <span style="color:var(--text-dim)" title="not recorded in this run — inferred from the run path (Phase 6 → off) or the 32/32 CLI default (→ on)">*</span>'
     : '';
-  return chip('Source', s.source, s.srcDim) + ' ' + chip('Domain', s.domain, s.domDim) + star;
+  return chip('Source Name', s.sourceName, s.srcNameDim) + ' ' + chip('Source Link', s.sourceLink, s.srcLinkDim) + star;
 }
 
 // train_accuracy - test_accuracy; null if either metric is missing (older records).
@@ -493,8 +494,8 @@ const TABLE_COLUMNS = [
     tip: 'Date and time this run finished training.' },
   { key: 'combo', label: 'Active extractors', sort: (r) => r.combo,
     tip: 'Which feature branches (semantic / emotion / style / context) fed the KAN in this run.' },
-  { key: 'context_identity', label: 'Context Source/Domain', sort: contextIdentityRank,
-    tip: 'Whether the context branch kept its Source and Domain hash-embedding fields on (--context_source_dim / --context_domain_dim > 0, the 32/32 default) or off (=0), the identity-free Phase 6 control that isolates outlet leakage. "context off" = the branch was not used. A trailing * means the record predates this field and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.' },
+  { key: 'context_identity', label: 'Context Source Name/Link', sort: contextIdentityRank,
+    tip: 'Whether the context branch kept its Source Name and Source Link hash-embedding fields on (--context_source_name_dim / --context_source_link_dim > 0, the 32/32 default) or off (=0), the identity-free Phase 6 control that isolates outlet leakage. "context off" = the branch was not used. A trailing * means the record predates this field and the state was inferred: a Phase 6 output path → off, anything else → the 32/32 default → on.' },
   { key: 'epochs', label: 'KAN epochs (run/requested)', sort: (r) => r.epochs.kan_epochs_run,
     tip: 'Epochs the KAN actually ran vs. the ones requested. If they differ, early stopping kicked in.' },
   { key: 'test_accuracy', label: 'Test accuracy', sort: (r) => r.test_accuracy,
@@ -517,7 +518,7 @@ const TABLE_COLUMNS = [
 
 let sortState = { key: 'timestamp', asc: true };
 let filterText = '';
-// Which context Source/Domain identity states to show. Global: drives the
+// Which context Source Name/Source Link identity states to show. Global: drives the
 // summary table AND every chart (renderAll works off `runs`, recomputed from
 // `allRuns` by recomputeRuns()).
 let ctxIdentityShow = { on: true, off: true, na: true };
@@ -529,8 +530,8 @@ function ctxIdentityOk(r) {
   if (ctxIdentityShow.on && ctxIdentityShow.off && ctxIdentityShow.na) return true;
   const rank = contextIdentityRank(r);
   if (rank === -2) return ctxIdentityShow.na;   // context branch not used
-  if (rank === 0) return ctxIdentityShow.off;   // Source and Domain both off
-  return ctxIdentityShow.on;                    // Source and/or Domain on
+  if (rank === 0) return ctxIdentityShow.off;   // Source Name and Source Link both off
+  return ctxIdentityShow.on;                    // Source Name and/or Source Link on
 }
 function f1FloorOk(r) {
   return !f1FloorOn || (typeof r.test_f1 === 'number' && r.test_f1 > F1_FLOOR);
@@ -792,12 +793,12 @@ function classBreakdownTable(t) {
   return `<table class="mini"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Support</th></tr>${rows}</table>`;
 }
 
-function topicBreakdownTable(tb) {
-  if (!tb) return '<p style="color:var(--text-dim)">Not available for this run (requires the topic_breakdown field, added in recent runs).</p>';
-  const rows = Object.entries(tb).sort((a, b) => b[1].n - a[1].n).map(([topic, m]) =>
-    `<tr><td>${topic}</td><td>${m.n}</td><td>${m.accuracy.toFixed(4)}</td><td>${m.f1.toFixed(4)}</td></tr>`
+function domainBreakdownTable(db) {
+  if (!db) return '<p style="color:var(--text-dim)">Not available for this run (requires the domain_breakdown field, added in recent runs).</p>';
+  const rows = Object.entries(db).sort((a, b) => b[1].n - a[1].n).map(([domain, m]) =>
+    `<tr><td>${domain}</td><td>${m.n}</td><td>${m.accuracy.toFixed(4)}</td><td>${m.f1.toFixed(4)}</td></tr>`
   ).join('');
-  return `<table class="mini"><tr><th>Topic</th><th>n</th><th>Accuracy</th><th>F1</th></tr>${rows}</table>`;
+  return `<table class="mini"><tr><th>Domain</th><th>n</th><th>Accuracy</th><th>F1</th></tr>${rows}</table>`;
 }
 
 function renderCards() {
@@ -834,7 +835,7 @@ function renderCards() {
             train time: ${r.training_time_seconds !== null && r.training_time_seconds !== undefined ? r.training_time_seconds.toFixed(1) + 's' : '—'} &nbsp;·&nbsp;
             # parameters: ${r.num_parameters !== null && r.num_parameters !== undefined ? r.num_parameters.toLocaleString() : '—'}<br>
             latent dims: ${Object.entries(r.latent_dims || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '—'}<br>
-            context Source/Domain: ${contextIdentityCell(r)}
+            context Source Name/Link: ${contextIdentityCell(r)}
           </p>
         </div>
         <div class="hparams-cols">
@@ -848,8 +849,8 @@ function renderCards() {
         ${classBreakdownTable(t)}
       </div>
       <div class="section-block">
-        <h4>Accuracy / F1 by Topic (test)</h4>
-        ${topicBreakdownTable(r.topic_breakdown)}
+        <h4>Accuracy / F1 by Domain (test)</h4>
+        ${domainBreakdownTable(r.domain_breakdown)}
       </div>
     </details>`;
   }).join('') || '<p class="empty-msg">No runs to show.</p>';
